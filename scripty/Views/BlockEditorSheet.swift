@@ -2,36 +2,33 @@
 //  BlockEditorSheet.swift
 //  scripty
 //
-//  Create or edit a screenplay block. The API only allows choosing the
-//  element type at creation time; editing changes content, the linked
-//  character, and tags.
+//  Everything about an element except its text: which type it is, who speaks it,
+//  its tags, and whether it is pinned or bookmarked. The text itself is typed
+//  straight into the page — see BlockEditorRow.
 //
 
 import SwiftUI
 
 struct BlockEditorSheet: View {
     let model: ScriptModel
-    let block: Block?   // nil = create a new block
+    let block: Block
 
     @Environment(\.dismiss) private var dismiss
-    @State private var content: String
     @State private var type: BlockType
     @State private var personId: Int?
     @State private var tags: String
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @FocusState private var contentFocused: Bool
 
-    init(model: ScriptModel, block: Block?) {
+    init(model: ScriptModel, block: Block) {
         self.model = model
         self.block = block
-        _content = State(initialValue: block?.content ?? "")
-        _type = State(initialValue: block?.blockType ?? .action)
-        _personId = State(initialValue: block?.personId)
-        _tags = State(initialValue: block?.tags ?? "")
+        _type = State(initialValue: block.blockType)
+        _personId = State(initialValue: block.personId)
+        _tags = State(initialValue: block.tags ?? "")
     }
 
-    private var isCreating: Bool { block == nil }
+    private var canRetype: Bool { block.hasLink(.setType) }
 
     private var showsCharacterPicker: Bool {
         (type == .dialogue || type.isCharacterCue) && !model.characters.isEmpty
@@ -40,49 +37,40 @@ struct BlockEditorSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if isCreating {
-                    Picker("Type", selection: $type) {
-                        ForEach(BlockType.allCases) { blockType in
-                            Text(blockType.label).tag(blockType)
+                Section {
+                    if canRetype {
+                        Picker("Type", selection: $type) {
+                            ForEach(BlockType.allCases) { candidate in
+                                Text(candidate.label).tag(candidate)
+                            }
                         }
+                    } else {
+                        LabeledContent("Type", value: type.label)
                     }
-                } else {
-                    LabeledContent("Type", value: type.label)
-                }
 
-                Section(type.isCharacterCue ? "Speaker Name" : "Content") {
-                    TextEditor(text: $content)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 140)
-                        .focused($contentFocused)
-                }
-
-                if showsCharacterPicker {
-                    Picker("Character", selection: $personId) {
-                        Text("None").tag(Int?.none)
-                        ForEach(model.characters) { person in
-                            Text(person.displayName).tag(Int?.some(person.id))
+                    if showsCharacterPicker {
+                        Picker("Character", selection: $personId) {
+                            Text("None").tag(Int?.none)
+                            ForEach(model.characters) { person in
+                                Text(person.displayName).tag(Int?.some(person.id))
+                            }
                         }
                     }
                 }
 
-                if !isCreating {
-                    Section("Tags") {
-                        TextField("Comma-separated tags", text: $tags)
-                            .textInputAutocapitalization(.never)
-                    }
+                Section("Tags") {
+                    TextField("Comma-separated tags", text: $tags)
+                        .textInputAutocapitalization(.never)
                 }
 
-                if let block {
-                    togglesSection(for: block)
-                }
+                togglesSection
 
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
                 }
             }
-            .navigationTitle(isCreating ? "New Block" : "Edit Block")
+            .navigationTitle("Element")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -93,20 +81,14 @@ struct BlockEditorSheet: View {
                         ProgressView()
                     } else {
                         Button("Save") { save() }
-                            .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
-            .onAppear {
-                model.hasActiveEdit = true
-                contentFocused = true
-            }
-            .onDisappear { model.hasActiveEdit = false }
         }
     }
 
     @ViewBuilder
-    private func togglesSection(for block: Block) -> some View {
+    private var togglesSection: some View {
         let canBookmark = block.hasLink(.toggleBookmark)
         let canPin = block.hasLink(.togglePinned)
         if canBookmark || canPin {
@@ -138,20 +120,20 @@ struct BlockEditorSheet: View {
         isSaving = true
         errorMessage = nil
         let trimmedTags = tags.trimmingCharacters(in: .whitespaces)
+
         Task {
-            let succeeded: Bool
-            if let block {
+            var succeeded = true
+            if type != block.blockType, canRetype {
+                succeeded = await model.setType(block, to: type, content: block.content)
+            }
+            if succeeded, block.hasLink(.update) {
                 succeeded = await model.updateBlock(
                     block,
-                    content: content,
+                    content: block.content ?? "",
                     personId: showsCharacterPicker ? personId : block.personId,
                     tags: trimmedTags.isEmpty ? nil : trimmedTags)
-            } else {
-                succeeded = await model.createBlock(
-                    content: content,
-                    type: type,
-                    personId: showsCharacterPicker ? personId : nil)
             }
+
             isSaving = false
             if succeeded {
                 dismiss()

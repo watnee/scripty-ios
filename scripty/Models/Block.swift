@@ -89,6 +89,51 @@ enum BlockType: String, CaseIterable, Identifiable {
     var isCharacterCue: Bool {
         self == .character || self == .dualDialogue
     }
+
+    /// Types that read as uppercase on the page, so the keyboard should start
+    /// there. The stored text is left alone, exactly as the web app leaves it.
+    var isUppercase: Bool {
+        self == .scene || self == .transition || self == .shot || isCharacterCue
+    }
+
+    /// Blocks whose content the writer types. A page break has none.
+    var isTextual: Bool {
+        self != .pageBreak
+    }
+
+    // MARK: - Element flow (mirrors fountain-power.js)
+
+    /// What Return opens next: a character cue is followed by their dialogue,
+    /// and anything else by action.
+    var nextOnEnter: BlockType {
+        isCharacterCue ? .dialogue : .action
+    }
+
+    /// The classic Final Draft Tab order.
+    static let tabCycle: [BlockType] = [
+        .scene, .action, .character, .parenthetical, .dialogue, .transition, .shot,
+    ]
+
+    /// Types outside the Tab order join it at their nearest equivalent, so Tab
+    /// from a Note advances as though it were Action.
+    private var tabCycleEntry: BlockType {
+        switch self {
+        case .text, .centered, .note: return .action
+        case .lyrics: return .dialogue
+        case .dualDialogue: return .character
+        case .section, .synopsis, .pageBreak: return .scene
+        default: return self
+        }
+    }
+
+    /// The next element type when cycling with Tab (or the previous one with
+    /// Shift-Tab), wrapping around the cycle.
+    func cycled(backward: Bool = false) -> BlockType {
+        let cycle = Self.tabCycle
+        let index = cycle.firstIndex(of: tabCycleEntry) ?? 0
+        let step = backward ? -1 : 1
+        return cycle[(index + step + cycle.count) % cycle.count]
+    }
 }
 
 struct CreateBlockCommand: Encodable {
@@ -98,9 +143,30 @@ struct CreateBlockCommand: Encodable {
     var type: String
 }
 
-/// The API does not allow changing a block's type after creation.
+/// Edits text and metadata. To change the element type, use `SetBlockTypeCommand`.
 struct EditBlockCommand: Encodable {
     var content: String
     var personId: Int?
     var tags: String?
+}
+
+/// Inserts a block directly below another — what Return does in the editor.
+/// Empty content is normal: the new element is blank until it is typed into.
+struct CreateBlockBelowCommand: Encodable {
+    var content: String
+    var personId: Int?
+    var type: String
+}
+
+/// Retypes a block. A nil `content` keeps the text the block already has.
+struct SetBlockTypeCommand: Encodable {
+    var type: String
+    var content: String?
+    var personId: Int?
+    var tags: String?
+}
+
+/// Reorders a block to an absolute position in the script.
+struct MoveBlockCommand: Encodable {
+    var position: Int
 }

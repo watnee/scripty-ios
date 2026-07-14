@@ -20,6 +20,12 @@ final class ScriptModel {
     private(set) var characters: [Person] = []
     private(set) var charactersLinks = HALLinks()
     private(set) var canViewCharacters = true
+
+    /// The server offers a first block only on an empty script the user may edit.
+    var canStartScript: Bool {
+        blocksLinks[.createInitial] != nil
+    }
+
     private(set) var undoRedo: UndoRedoStatus?
     private(set) var isLoading = false
     var errorMessage: String?
@@ -121,6 +127,140 @@ final class ScriptModel {
             await refreshUndoRedo()
             errorMessage = nil
         } catch {
+            report(error)
+        }
+    }
+
+    // MARK: - Inline editing
+
+    /// Saves a row's text, if it actually changed. Called when a row loses focus.
+    @discardableResult
+    func commit(_ block: Block, content: String) async -> Bool {
+        guard content != (block.content ?? "") else { return true }
+        guard let link = block.link(.update) else { return false }
+        do {
+            let updated: Block = try await app.client.fetch(
+                from: link, method: "PUT",
+                body: EditBlockCommand(content: content,
+                                       personId: block.personId,
+                                       tags: block.tags))
+            replace(updated)
+            await refreshUndoRedo()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    /// Return: leaves `before` in the block and carries `after` into a new one
+    /// below it. With the caret at the end of the line — the common case —
+    /// `after` is empty and this simply opens the next element.
+    ///
+    /// Returns the new block so the caller can move the caret into it.
+    func splitBlock(_ block: Block, before: String, after: String) async -> Block? {
+        guard block.hasLink(.createBelow) else { return nil }
+        if before != (block.content ?? "") {
+            guard await commit(block, content: before) else { return nil }
+        }
+        return await createBlockBelow(block, content: after, type: block.blockType.nextOnEnter)
+    }
+
+    /// Inserts a block below `block`, the way the web editor does.
+    @discardableResult
+    func createBlockBelow(_ block: Block, content: String = "", type: BlockType) async -> Block? {
+        guard let link = block.link(.createBelow) else { return nil }
+        do {
+            let created: Block = try await app.client.fetch(
+                from: link, method: "POST",
+                body: CreateBlockBelowCommand(content: content, personId: nil, type: type.rawValue))
+            await loadBlocks()
+            await refreshUndoRedo()
+            errorMessage = nil
+            return created
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// The first element of an empty script: there is nothing to insert below
+    /// yet, so the server mints the blank block for us to type into.
+    @discardableResult
+    func createFirstBlock() async -> Block? {
+        guard let link = blocksLinks[.createInitial] else { return nil }
+        do {
+            let created: Block = try await app.client.fetch(from: link, method: "POST")
+            await loadBlocks()
+            await refreshUndoRedo()
+            errorMessage = nil
+            return created
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Retypes a block — the element-type bar and Tab both land here. `content`
+    /// carries the text currently on screen so an unsaved edit is not lost when
+    /// the type changes.
+    @discardableResult
+    func setType(_ block: Block, to type: BlockType, content: String? = nil) async -> Bool {
+        guard let link = block.link(.setType) else { return false }
+        do {
+            let updated: Block = try await app.client.fetch(
+                from: link, method: "POST",
+                body: SetBlockTypeCommand(type: type.rawValue,
+                                          content: content,
+                                          personId: block.personId,
+                                          tags: nil))
+            replace(updated)
+            // Retyping a cue can mint a character, and DIALOGUE after a cue
+            // rewrites content server-side, so take the server's word for both.
+            await loadBlocks()
+            await loadCharacters()
+            await refreshUndoRedo()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    /// Drag-to-reorder. Offsets are positions in `blocks`; the server wants the
+    /// absolute order the block should take.
+    func move(fromOffsets source: IndexSet, toOffset destination: Int) async {
+        guard let sourceIndex = source.first, blocks.indices.contains(sourceIndex) else { return }
+        let block = blocks[sourceIndex]
+        guard let link = block.link(.move) else { return }
+
+        // SwiftUI hands back the destination as an index into the list *before*
+        // the row is lifted out, so dragging downward overshoots by one.
+        var reordered = blocks
+        reordered.remove(at: sourceIndex)
+        let finalIndex = destination > sourceIndex ? destination - 1 : destination
+        guard finalIndex != sourceIndex, reordered.indices.contains(finalIndex)
+                || finalIndex == reordered.count
+        else { return }
+        reordered.insert(block, at: finalIndex)
+
+        // Orders are contiguous but not assumed to start at any given number:
+        // the block lands on whichever order now sits at that position.
+        let orders = blocks.compactMap(\.order).sorted()
+        guard orders.indices.contains(finalIndex) else { return }
+
+        blocks = reordered   // move now; the reload below confirms it
+        do {
+            let _: Block = try await app.client.fetch(
+                from: link, method: "POST",
+                body: MoveBlockCommand(position: orders[finalIndex]))
+            await loadBlocks()
+            await refreshUndoRedo()
+            errorMessage = nil
+        } catch {
+            await loadBlocks()   // put it back where the server says it is
             report(error)
         }
     }

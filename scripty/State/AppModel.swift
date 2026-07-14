@@ -47,6 +47,8 @@ final class AppModel {
 
     func signIn(username: String, password: String) async {
         let credentials = Credentials(username: username, password: password)
+        // Start on a clean session so no cookie carries over from a prior account.
+        client.reset()
         client.credentials = credentials
         do {
             apiRoot = try await client.fetch(APIRoot.self, from: client.rootLink)
@@ -64,6 +66,7 @@ final class AppModel {
 
     func signOut() {
         KeychainStore.delete()
+        client.reset()
         client.credentials = nil
         apiRoot = nil
         signInError = nil

@@ -13,24 +13,36 @@ final class APIClient {
     let baseURL: URL
     var credentials: Credentials?
 
-    private let session: URLSession
+    private var session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
     init(baseURL: URL = AppConfig.baseURL, credentials: Credentials? = nil) {
         self.baseURL = baseURL
         self.credentials = credentials
-
-        // Basic auth on every request; no cookies so state never leaks
-        // between accounts (the server also sets remember-me cookies).
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpShouldSetCookies = false
-        configuration.httpCookieAcceptPolicy = .never
-        session = URLSession(configuration: configuration)
+        session = Self.makeSession()
 
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         encoder = JSONEncoder()
+    }
+
+    /// Every request carries Basic auth, so the session cookie never decides
+    /// *who* the caller is. It is accepted because the server keeps the undo
+    /// stack on the HTTP session: refuse the cookie and every checkpoint is
+    /// discarded, leaving undo and redo permanently unavailable.
+    ///
+    /// The store is ephemeral and belongs to this URLSession alone — nothing is
+    /// written to disk or shared with other accounts, and `reset()` discards it.
+    private static func makeSession() -> URLSession {
+        URLSession(configuration: .ephemeral)
+    }
+
+    /// Drops the cookie, and with it the server-side undo stack, so no state
+    /// survives into the next account. Call when the session ends.
+    func reset() {
+        session.invalidateAndCancel()
+        session = Self.makeSession()
     }
 
     /// The API entry point (`GET /api`) — the root of all link-following.
