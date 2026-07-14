@@ -35,6 +35,13 @@ struct ContentView: View {
                     description: Text("Choose a screenplay from the sidebar, or create a new one."))
             }
         }
-        .task { await projectList.refresh() }
+        .task {
+            await projectList.refresh()
+            // The demo exists to show the screenplay, so open the sample
+            // script rather than parking on the empty detail pane.
+            if app.isDemo, selectedProject == nil {
+                selectedProject = projectList.projects.first
+            }
+        }
     }
 }

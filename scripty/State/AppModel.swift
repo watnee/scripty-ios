@@ -29,6 +29,12 @@ final class AppModel {
     /// demo mode — used by scripts/demo.sh and never persisted.
     static let demoLaunchKey = "scripty.demo"
 
+    /// Bumped whenever the session is replaced. An in-flight bootstrap that
+    /// resumes against a stale token must not overwrite the newer session —
+    /// otherwise `scripty://demo` on a cold launch loses a race with the
+    /// stored-credential check and drops the user back at the login screen.
+    private var session = 0
+
     /// Called once at launch: try stored credentials against the API root.
     func bootstrap() async {
         if UserDefaults.standard.bool(forKey: Self.demoLaunchKey) {
@@ -39,15 +45,20 @@ final class AppModel {
             phase = .signedOut
             return
         }
+        let token = session
         client.credentials = stored
         do {
-            apiRoot = try await client.fetch(APIRoot.self, from: client.rootLink)
+            let root = try await client.fetch(APIRoot.self, from: client.rootLink)
+            guard token == session else { return }
+            apiRoot = root
             phase = .signedIn
         } catch APIError.unauthorized {
+            guard token == session else { return }
             client.credentials = nil
             KeychainStore.delete()
             phase = .signedOut
         } catch {
+            guard token == session else { return }
             client.credentials = nil
             signInError = error.localizedDescription
             phase = .signedOut
@@ -73,7 +84,12 @@ final class AppModel {
 
     /// Enters the offline demo: a fresh in-memory backend seeded with a
     /// sample screenplay. Stored real credentials are left untouched.
+    ///
+    /// Re-entering while already in the demo is a no-op, so opening
+    /// `scripty://demo` again doesn't throw away the edits being demoed.
     func enterDemo() async {
+        guard !isDemo else { return }
+        session += 1
         let demoClient = APIClient(baseURL: DemoBackend.baseURL, demo: DemoBackend())
         do {
             apiRoot = try await demoClient.fetch(APIRoot.self, from: demoClient.rootLink)
@@ -88,6 +104,7 @@ final class AppModel {
     }
 
     func signOut() {
+        session += 1
         if isDemo {
             isDemo = false
             client = APIClient()

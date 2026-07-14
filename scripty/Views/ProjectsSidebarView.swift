@@ -15,6 +15,9 @@ struct ProjectsSidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
+            if app.isDemo {
+                DemoBanner()
+            }
             ForEach(model.projects) { project in
                 ProjectRow(project: project)
                     .tag(project)
@@ -93,6 +96,29 @@ struct ProjectsSidebarView: View {
         Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })
+    }
+}
+
+/// Demo mode looks exactly like a real session, so say so plainly: nothing
+/// here is talking to a server, and nothing here survives a relaunch.
+private struct DemoBanner: View {
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Demo Mode")
+                    .font(.subheadline.weight(.semibold))
+                Text("A sample screenplay running offline. Edits are discarded when you quit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.tint)
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(Color.clear)
+        .selectionDisabled()
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -485,7 +485,18 @@ actor DemoBackend {
             ("DIALOGUE", "They said this town was empty. They said a lot of things.", juniper.id, false),
             ("SYNOPSIS", "Juniper discovers the town isn't abandoned - it's hiding.", nil, false),
         ])
-        _ = (lastTake, dustAndNeon)
+
+        // Arrive with a bookmark and a tag already set, so those affordances
+        // are visible in the script without the user having to add them first.
+        flag(project: lastTake, order: 17, bookmarked: true, tags: "vfx, rain")
+        flag(project: dustAndNeon, order: 1, bookmarked: true)
+    }
+
+    private func flag(project: DemoProject, order: Int,
+                      bookmarked: Bool = false, tags: String? = nil) {
+        guard let index = blocks[project.id]?.firstIndex(where: { $0.order == order }) else { return }
+        blocks[project.id]?[index].bookmarked = bookmarked
+        blocks[project.id]?[index].tags = tags
     }
 
     private func addProject(title: String, writers: String?,
