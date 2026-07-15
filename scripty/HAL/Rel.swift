@@ -22,6 +22,7 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let selfRel = Rel("self")
     static let users = Rel("users")
     static let projects = Rel("projects")
+    static let importProject = Rel("importProject")
     static let blocks = Rel("blocks")
     static let characters = Rel("characters")
     static let actors = Rel("actors")

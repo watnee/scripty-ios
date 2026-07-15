@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Mirrors the web project list's sort control ("Last edited" / "Name A–Z").
 /// Raw values back an @AppStorage so the choice sticks, like the web app's
@@ -35,6 +36,7 @@ struct ProjectsSidebarView: View {
     @Binding var selection: Project?
 
     @State private var showingCreate = false
+    @State private var showingImporter = false
     @State private var renamingProject: Project?
     @State private var searchText = ""
     @AppStorage("projectListSort") private var sortMode = ProjectSort.lastEdited
@@ -127,6 +129,15 @@ struct ProjectsSidebarView: View {
                     Label("New Project", systemImage: "plus")
                 }
             }
+            if model.canImport {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        showingImporter = true
+                    } label: {
+                        Label("Import Project", systemImage: "square.and.arrow.down")
+                    }
+                }
+            }
             ToolbarItem(placement: .secondaryAction) {
                 Picker("Sort", selection: $sortMode) {
                     ForEach(ProjectSort.allCases) { mode in
@@ -152,6 +163,22 @@ struct ProjectsSidebarView: View {
         .sheet(item: $renamingProject) { project in
             ProjectTitleSheet(title: project.title ?? "", heading: "Rename Project") { title in
                 await model.rename(project, to: title)
+            }
+        }
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: [.json],
+                      allowsMultipleSelection: false) { result in
+            guard case let .success(urls) = result, let url = urls.first else { return }
+            Task {
+                // Imported files live outside the sandbox; read them under a
+                // security scope, then hand the bytes to the API.
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url) else {
+                    model.errorMessage = "Couldn't read that file."
+                    return
+                }
+                await model.importProject(data: data, filename: url.lastPathComponent)
             }
         }
         .alert("Error", isPresented: errorBinding) {
