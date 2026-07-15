@@ -28,6 +28,7 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let teams = Rel("teams")
     static let update = Rel("update")
     static let delete = Rel("delete")
+    static let toggleDefault = Rel("toggleDefault")
     static let project = Rel("project")
     static let actor = Rel("actor")
     static let undo = Rel("undo")

@@ -69,6 +69,22 @@ final class ProjectListModel {
         }
     }
 
+    /// Toggle this project as the user's default (the web list's star). The
+    /// server returns the refreshed collection with updated `default` flags.
+    func toggleDefault(_ project: Project) async {
+        guard let link = project.link(.toggleDefault) else { return }
+        do {
+            let collection: HALCollection<Project> = try await app.client.fetch(from: link, method: "POST")
+            projects = collection.items.sorted {
+                ($0.lastEdited ?? .distantPast) > ($1.lastEdited ?? .distantPast)
+            }
+            collectionLinks = collection.links
+            errorMessage = nil
+        } catch {
+            report(error)
+        }
+    }
+
     func delete(_ project: Project) async {
         guard let link = project.link(.delete) else { return }
         do {

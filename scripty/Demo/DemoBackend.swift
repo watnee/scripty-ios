@@ -46,6 +46,7 @@ actor DemoBackend {
     private var people: [Int: [DemoPerson]] = [:]     // keyed by project id
     private var undoStacks: [Int: [[DemoBlock]]] = [:]
     private var redoStacks: [Int: [[DemoBlock]]] = [:]
+    private var defaultProjectId: Int?
     private var nextProjectId = 1
     private var nextBlockId = 1
     private var nextPersonId = 1
@@ -135,6 +136,10 @@ actor DemoBackend {
                        "_links": ["self": link("/api/project/\(id)/sync-status")]])
         case ("GET", "export"):
             return (200, Data(fountainExport(projects[index]).utf8))
+        case ("POST", "toggleDefault"):
+            defaultProjectId = (defaultProjectId == id) ? nil : id
+            return ok(["_embedded": ["projectResourceList": projects.map(projectJSON)],
+                       "_links": ["self": link("/api/project")]])
         default:
             return notFound()
         }
@@ -304,10 +309,12 @@ actor DemoBackend {
             "title": project.title,
             "lastEdited": iso.string(from: project.lastEdited),
             "teams": ["Demo"],
+            "default": project.id == defaultProjectId,
             "_links": [
                 "self": link("/api/project/\(project.id)"),
                 "update": link("/api/project/\(project.id)"),
                 "delete": link("/api/project/\(project.id)"),
+                "toggleDefault": link("/api/project/\(project.id)/toggleDefault"),
                 "blocks": link("/api/block?projectId=\(project.id)"),
                 "characters": link("/api/person?projectId=\(project.id)"),
                 "undoRedoStatus": link("/api/project/\(project.id)/undo-redo-status"),

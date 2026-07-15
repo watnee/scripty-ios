@@ -74,7 +74,9 @@ struct ProjectsSidebarView: View {
                 DemoBanner()
             }
             ForEach(displayedProjects) { project in
-                ProjectRow(project: project)
+                ProjectRow(project: project) {
+                    Task { await model.toggleDefault(project) }
+                }
                     .tag(project)
                     .swipeActions(edge: .trailing) {
                         // Affordances are driven by the links the server returned.
@@ -191,12 +193,42 @@ private struct DemoBanner: View {
 
 private struct ProjectRow: View {
     let project: Project
+    let onToggleDefault: () -> Void
+
+    private var isDefault: Bool { project.isDefault ?? false }
 
     var body: some View {
+        HStack(spacing: 10) {
+            // The star mirrors the web list's default-project toggle; the
+            // server only advertises `toggleDefault` when it's allowed.
+            if project.hasLink(.toggleDefault) {
+                Button(action: onToggleDefault) {
+                    Image(systemName: isDefault ? "star.fill" : "star")
+                        .foregroundStyle(isDefault ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(isDefault ? "Remove as default project" : "Set as default project")
+            }
+            content
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(project.displayTitle)
-                .font(.headline)
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(project.displayTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+                if isDefault {
+                    Text("Default")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tint)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.tint.opacity(0.15), in: Capsule())
+                }
+            }
             HStack(spacing: 6) {
                 if let lastEdited = project.lastEdited {
                     Label {
@@ -217,7 +249,6 @@ private struct ProjectRow: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
     }
 }
 
