@@ -99,4 +99,86 @@ final class APIClient {
         let data = try await data(for: link, method: method, body: body)
         return try decoder.decode(T.self, from: data)
     }
+
+    // MARK: - Multipart upload
+
+    /// Shared with `DemoBackend` so the in-process backend can parse the same
+    /// body without access to request headers.
+    static let multipartBoundary = "----scripty.boundary.9f2c1a7b"
+
+    /// Uploads a file as `multipart/form-data`, following a HAL link. Used for
+    /// importing a song/note file — the server reuses its web import pipeline.
+    @discardableResult
+    func upload(to link: HALLink,
+                fields: [String: String] = [:],
+                fileFieldName: String = "file",
+                fileName: String,
+                fileData: Data,
+                mimeType: String = "application/octet-stream") async throws -> Data {
+        guard let url = link.url(relativeTo: baseURL) else {
+            throw APIError.invalidLink(link.href)
+        }
+        let boundary = Self.multipartBoundary
+        var body = Data()
+        let dashes = "--"
+        let crlf = "\r\n"
+        for (name, value) in fields.sorted(by: { $0.key < $1.key }) {
+            body.append(Data((dashes + boundary + crlf).utf8))
+            body.append(Data(("Content-Disposition: form-data; name=\"\(name)\"" + crlf + crlf).utf8))
+            body.append(Data((value + crlf).utf8))
+        }
+        body.append(Data((dashes + boundary + crlf).utf8))
+        body.append(Data(("Content-Disposition: form-data; name=\"\(fileFieldName)\"; filename=\"\(fileName)\"" + crlf).utf8))
+        body.append(Data(("Content-Type: \(mimeType)" + crlf + crlf).utf8))
+        body.append(fileData)
+        body.append(Data((crlf + dashes + boundary + dashes + crlf).utf8))
+
+        let data: Data
+        let statusCode: Int
+        if let demo {
+            (statusCode, data) = await demo.respond(method: "POST", url: url, body: body)
+        } else {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/hal+json", forHTTPHeaderField: "Accept")
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            if let credentials {
+                request.setValue(credentials.basicAuthorizationHeader, forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = body
+            let (received, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.server(status: -1)
+            }
+            data = received
+            statusCode = http.statusCode
+        }
+        switch statusCode {
+        case 200..<300:
+            return data
+        case 400:
+            let fields = (try? decoder.decode([String: String].self, from: data)) ?? [:]
+            throw APIError.validation(fields)
+        case 401:
+            throw APIError.unauthorized
+        case 403:
+            throw APIError.forbidden
+        case 404:
+            throw APIError.notFound
+        default:
+            throw APIError.server(status: statusCode)
+        }
+    }
+
+    func upload<T: Decodable>(_ type: T.Type = T.self,
+                              to link: HALLink,
+                              fields: [String: String] = [:],
+                              fileFieldName: String = "file",
+                              fileName: String,
+                              fileData: Data,
+                              mimeType: String = "application/octet-stream") async throws -> T {
+        let data = try await upload(to: link, fields: fields, fileFieldName: fileFieldName,
+                                    fileName: fileName, fileData: fileData, mimeType: mimeType)
+        return try decoder.decode(T.self, from: data)
+    }
 }

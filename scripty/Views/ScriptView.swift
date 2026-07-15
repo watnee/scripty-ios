@@ -14,6 +14,7 @@ struct ScriptView: View {
     @State private var editingBlock: Block?
     @State private var showingCreate = false
     @State private var showingCharacters = false
+    @State private var showingSongs = false
 
     init(app: AppModel, project: Project) {
         _model = State(initialValue: ScriptModel(app: app, project: project))
@@ -81,6 +82,14 @@ struct ScriptView: View {
                     }
                 }
 
+                if model.canViewDocuments {
+                    Button {
+                        showingSongs = true
+                    } label: {
+                        Label("Songs & Notes", systemImage: "music.note.list")
+                    }
+                }
+
                 if !model.exportOptions.isEmpty {
                     ExportButton(model: model)
                 }
@@ -121,6 +130,9 @@ struct ScriptView: View {
         }
         .sheet(isPresented: $showingCharacters) {
             CharactersView(model: model)
+        }
+        .sheet(isPresented: $showingSongs) {
+            SongsView(model: model)
         }
         .alert("Error", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
