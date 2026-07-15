@@ -43,7 +43,8 @@ struct EditableBlockRow: View {
             onTab: { backward in Task { await model.cycleType(block.id, backward: backward) } },
             onFocus: { model.beginEditing(block.id) },
             onBlur: { model.endEditing(block.id) },
-            onCaretConsumed: { model.consumeCaretRequest($0) })
+            onCaretConsumed: { model.consumeCaretRequest($0) },
+            onLiveType: { type in Task { await model.applyDetectedType(block.id, to: type) } })
 
         return Group {
             if let width = innerWidth {

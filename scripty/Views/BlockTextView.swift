@@ -54,6 +54,9 @@ struct BlockTextView: UIViewRepresentable {
     var onFocus: () -> Void
     var onBlur: () -> Void
     var onCaretConsumed: (_ token: Int) -> Void
+    /// Fired when live Fountain detection retypes the block as you type (e.g.
+    /// a leading `.` turns it into a scene heading).
+    var onLiveType: (_ type: BlockType) -> Void
 
     func makeUIView(context: Context) -> BlockUITextView {
         let view = BlockUITextView()
@@ -152,6 +155,22 @@ struct BlockTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            // Live Fountain detection, mirroring the web editor's input handler:
+            // when the line starts with a force marker, rewrite the content in
+            // place (stripping the marker, keeping the caret) and retype the
+            // block. Skipped mid-composition so it never disturbs IME input.
+            if textView.markedTextRange == nil,
+               let detected = Fountain.liveDetect(textView.text) {
+                if detected.content != textView.text {
+                    let start = textView.selectedRange.location
+                    textView.text = detected.content
+                    let pos = min(start, (detected.content as NSString).length)
+                    textView.selectedRange = NSRange(location: pos, length: 0)
+                }
+                parent.onText(textView.text)
+                parent.onLiveType(detected.type)
+                return
+            }
             parent.onText(textView.text)
         }
 

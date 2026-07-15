@@ -261,16 +261,32 @@ final class ScriptModel {
         let full = liveText[blockId] ?? block.content ?? ""
         let clampedCaret = max(0, min(caret, full.count))
         let splitIndex = full.index(full.startIndex, offsetBy: clampedCaret)
-        let head = String(full[..<splitIndex])
+        var head = String(full[..<splitIndex])
         let tail = String(full[splitIndex...])
-        let newType = block.blockType.followingType
-        let carryPerson = block.blockType.isCharacterCue ? block.personId : nil
+
+        // Fountain detection runs on Return, as on the web: a bare heading,
+        // transition or cue retypes the current element (and rewrites its
+        // content), and the next element's type follows from the detected type.
+        var headType = block.blockType
+        if let detected = Fountain.detect(head) {
+            headType = detected.type
+            head = detected.content
+        }
+        let newType = headType.followingType
+        let carryPerson = headType.isCharacterCue ? block.personId : nil
 
         saveTasks[blockId]?.cancel()
         saveTasks[blockId] = nil
         do {
-            // Commit the head to the anchor block first so the split is clean.
-            if (block.content ?? "") != head, let update = block.link(.update) {
+            // Commit the head to the anchor block first so the split is clean —
+            // retyping if detection changed the element type, else a plain edit.
+            if headType != block.blockType, let setTypeLink = block.link(.setType) {
+                let updated: Block = try await app.client.fetch(
+                    from: setTypeLink, method: "POST",
+                    body: SetTypeCommand(type: headType.rawValue, content: head,
+                                         personId: block.personId, tags: block.tags))
+                replace(updated)
+            } else if (block.content ?? "") != head, let update = block.link(.update) {
                 let updated: Block = try await app.client.fetch(
                     from: update, method: "PUT",
                     body: EditBlockCommand(content: head, personId: block.personId, tags: block.tags))
@@ -327,6 +343,10 @@ final class ScriptModel {
     func retype(_ blockId: Int, to type: BlockType) async {
         guard let block = blocks.first(where: { $0.id == blockId }),
               let link = block.link(.setType) else { return }
+        // setType persists the current text too, so drop any pending debounced
+        // PUT to avoid a redundant, racing save.
+        saveTasks[blockId]?.cancel()
+        saveTasks[blockId] = nil
         let content = liveText[blockId] ?? block.content
         do {
             let updated: Block = try await app.client.fetch(
@@ -345,6 +365,15 @@ final class ScriptModel {
     func cycleType(_ blockId: Int, backward: Bool) async {
         guard let block = blocks.first(where: { $0.id == blockId }) else { return }
         await retype(blockId, to: block.blockType.cycled(backward: backward))
+    }
+
+    /// Applies a type produced by live Fountain detection. The stripped content
+    /// is already reflected in `liveText`, so this only needs to retype — and
+    /// only when the type actually changed.
+    func applyDetectedType(_ blockId: Int, to type: BlockType) async {
+        guard let block = blocks.first(where: { $0.id == blockId }),
+              block.blockType != type else { return }
+        await retype(blockId, to: type)
     }
 
     /// Adds an element to the end of the script (or seeds the very first one
