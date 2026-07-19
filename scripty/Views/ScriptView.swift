@@ -24,6 +24,8 @@ struct ScriptView: View {
     /// Presented from the link the block collection advertised.
     @State private var trashLink: HALLink?
     @State private var showingEditions = false
+    /// The element whose comment thread is open, if any.
+    @State private var commentTarget: Block?
     @State private var editions: EditionsModel
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
@@ -92,6 +94,13 @@ struct ScriptView: View {
                 }) { block in
                     DeletedBlockRow(block: block)
                 }
+        }
+        .sheet(item: $commentTarget) { block in
+            // Presented from the link the block advertised, so the thread
+            // cannot open for an element the server never offered one for.
+            if let source = block.link(.comments) {
+                CommentsView(app: model.app, block: block, source: source)
+            }
         }
         .sheet(isPresented: $showingEditions) {
             EditionsView(model: editions) { edition in
@@ -232,7 +241,9 @@ struct ScriptView: View {
                 selection.toggle(block.id)
             }
         } else if block.isEditable {
-            EditableBlockRow(model: model, block: block)
+            EditableBlockRow(model: model, block: block) { commented in
+                commentTarget = commented
+            }
         } else {
             BlockRowView(block: block)
                 .padding(.vertical, 4)

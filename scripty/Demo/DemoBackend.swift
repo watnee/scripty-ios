@@ -81,6 +81,8 @@ actor DemoBackend {
     private var undoStacks: [Int: [[DemoBlock]]] = [:]
     private var versions: [Int: [DemoVersion]] = [:]
     private var nextVersionId = 1
+    private var comments: [DemoComment] = []
+    private var nextCommentId = 1
     private var editions: [DemoEdition] = []
     private var editionBlocks: [Int: [DemoBlock]] = [:]
     private var nextEditionId = 1
@@ -431,10 +433,15 @@ actor DemoBackend {
             break
         }
 
-        // `/api/block/trash…` is a sibling of the block resources, not a block
-        // id, so it is picked off before the numeric lookup.
+        // `/api/block/trash…` and `/api/block/comments/{id}` are siblings of
+        // the block resources, not block ids, so they are picked off before the
+        // numeric lookup.
         if path.first == "trash" {
             return routeBlockTrash(method: method, path: Array(path.dropFirst()), query: query)
+        }
+        if path.first == "comments", path.count == 2, method == "DELETE",
+           let commentId = Int(path[1]) {
+            return routeDeleteComment(commentId)
         }
 
         guard let id = path.first.flatMap(Int.init),
@@ -503,6 +510,8 @@ actor DemoBackend {
             }
             touch(projectId)
             return ok([:])
+        case (_, "comments"):
+            return routeComments(method: method, blockId: id, fields: fields)
         case ("POST", "bookmark"):
             blocks[projectId]?[index].bookmarked.toggle()
             return ok(blockJSON(blocks[projectId]![index], projectId: projectId))
@@ -845,6 +854,78 @@ actor DemoBackend {
     // MARK: - Undo / redo
 
     /// History is snapshot-based: good enough for a demo, invisible to the UI.
+    // MARK: - Comments
+
+    private struct DemoComment {
+        var id: Int
+        var blockId: Int
+        var authorName: String
+        var body: String
+        var createdAt: Date
+        /// Whether the demo's single user wrote it. Only their own comments —
+        /// and any comment on a script they can edit — offer a delete link.
+        var mine: Bool
+    }
+
+    private func routeComments(method: String, blockId: Int,
+                               fields: [String: Any]) -> (Int, Data) {
+        switch method {
+        case "GET":
+            return commentCollection(blockId)
+        case "POST":
+            guard let body = (fields["body"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty else {
+                return badRequest("body")
+            }
+            comments.append(DemoComment(id: nextCommentId, blockId: blockId,
+                                        authorName: "You", body: body,
+                                        createdAt: Date(), mine: true))
+            nextCommentId += 1
+            return commentCollection(blockId)
+        default:
+            return notFound()
+        }
+    }
+
+    private func routeDeleteComment(_ commentId: Int) -> (Int, Data) {
+        guard let index = comments.firstIndex(where: { $0.id == commentId }) else {
+            return notFound()
+        }
+        let blockId = comments[index].blockId
+        comments.remove(at: index)
+        return commentCollection(blockId)
+    }
+
+    private func commentCollection(_ blockId: Int) -> (Int, Data) {
+        let items = comments
+            .filter { $0.blockId == blockId }
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { comment -> [String: Any] in
+                var links: [String: Any] = [
+                    "comments": link("/api/block/\(blockId)/comments"),
+                ]
+                // The demo user can edit the script, so every comment here is
+                // deletable — but the link is still what says so.
+                links["delete"] = link("/api/block/comments/\(comment.id)")
+                return [
+                    "id": comment.id,
+                    "blockId": blockId,
+                    "authorName": comment.authorName,
+                    "body": comment.body,
+                    "createdAt": iso.string(from: comment.createdAt),
+                    "_links": links,
+                ]
+            }
+        return ok([
+            "_embedded": ["blockCommentResourceList": items],
+            "_links": [
+                "self": link("/api/block/\(blockId)/comments"),
+                "addComment": link("/api/block/\(blockId)/comments"),
+                "block": link("/api/block/\(blockId)"),
+            ],
+        ])
+    }
+
     // MARK: - Editions
 
     /// A named variant of a script. Blocks belong to an edition; the demo keys
@@ -1527,6 +1608,9 @@ actor DemoBackend {
                 "createBelow": link("/api/block/\(block.id)/below"),
                 "setType": link("/api/block/\(block.id)/type"),
                 "move": link("/api/block/\(block.id)/move"),
+                // Commenting needs only read access, so this is offered
+                // alongside the editing links rather than gated with them.
+                "comments": link("/api/block/\(block.id)/comments"),
             ],
         ]
         if let personId = block.personId {
@@ -1774,6 +1858,29 @@ actor DemoBackend {
             return copy
         }
         seedEdition(dustAndNeon.id, name: "First Draft", isDefault: true, isPublished: true)
+
+        // A short thread already in place, so the comments screen shows a
+        // conversation rather than an empty state.
+        if let commented = (blocks[lastTake.id] ?? []).first(where: { $0.type == "ACTION" }) {
+            seedComment(commented.id, author: "Rosa Delgado",
+                        body: "Can we lose the second half of this? It plays long.",
+                        minutesAgo: 220, mine: false)
+            seedComment(commented.id, author: "You",
+                        body: "Agreed — trimming after the table read.",
+                        minutesAgo: 55, mine: true)
+        }
+    }
+
+    private func seedComment(_ blockId: Int, author: String, body: String,
+                             minutesAgo: Int, mine: Bool) {
+        comments.append(DemoComment(
+            id: nextCommentId,
+            blockId: blockId,
+            authorName: author,
+            body: body,
+            createdAt: Date(timeIntervalSinceNow: -Double(minutesAgo) * 60),
+            mine: mine))
+        nextCommentId += 1
     }
 
     @discardableResult

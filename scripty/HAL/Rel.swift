@@ -72,6 +72,10 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let purge = Rel("purge")
     static let emptyTrash = Rel("emptyTrash")
 
+    // Collaboration.
+    static let comments = Rel("comments")
+    static let addComment = Rel("addComment")
+
     // Named variants of a script.
     static let editions = Rel("editions")
     static let setDefault = Rel("setDefault")

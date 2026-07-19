@@ -526,6 +526,58 @@ func run() async {
     check("the survivor became the default",
           remaining.first?["default"] as? Bool == true)
 
+    // --- COMMENTS ---
+    //
+    // Commenting needs only read access, so the rel sits outside the editing
+    // gate. Who may delete is expressed as a link, not a flag — a client should
+    // be told what it may do rather than compute it from a boolean.
+    // Its own block: the bulk and trash checks above delete and purge their
+    // way through the script, so nothing earlier can be relied on to survive.
+    let commentSubject = await be.respond(method: "POST", url: url("/api/block"),
+                                          body: body(["projectId": pid, "content": "A line worth discussing.",
+                                                      "type": "ACTION"]))
+    let commentedId = json(commentSubject.data)["id"] as? Int ?? 0
+    check("created a block to comment on", commentedId != 0)
+    check("a block advertises `comments`",
+          (json(commentSubject.data)["_links"] as? [String: Any])?["comments"] != nil)
+
+    func thread(_ blockId: Int) async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/block/\(blockId)/comments"), body: nil).data))
+    }
+
+    let threadPayload = json(await be.respond(method: "GET", url: url("/api/block/\(commentedId)/comments"), body: nil).data)
+    check("the thread offers `addComment`",
+          (threadPayload["_links"] as? [String: Any])?["addComment"] != nil)
+
+    let before = embedded(threadPayload).count
+    let posted = await be.respond(method: "POST", url: url("/api/block/\(commentedId)/comments"),
+                                  body: body(["body": "Does this land after the cut?"]))
+    check("add comment -> 200", posted.status == 200, "got \(posted.status)")
+    var posts = embedded(json(posted.data))
+    check("the comment joined the thread", posts.count == before + 1,
+          "\(before) -> \(posts.count)")
+    check("the thread reads oldest first", {
+        let dates = posts.compactMap { $0["createdAt"] as? String }
+        return dates == dates.sorted()
+    }())
+    check("an empty comment -> 400",
+          await be.respond(method: "POST", url: url("/api/block/\(commentedId)/comments"),
+                           body: body(["body": "   "])).status == 400)
+
+    // Permission travels as a link.
+    let mine = posts.last
+    check("a deletable comment advertises `delete`",
+          (mine?["_links"] as? [String: Any])?["delete"] != nil)
+
+    let mineId = mine?["id"] as? Int ?? 0
+    let removed = await be.respond(method: "DELETE", url: url("/api/block/comments/\(mineId)"), body: nil)
+    check("delete comment -> 200", removed.status == 200, "got \(removed.status)")
+    posts = embedded(json(removed.data))
+    check("the comment is gone", !posts.contains { $0["id"] as? Int == mineId })
+    check("the rest of the thread survived", posts.count == before)
+    check("deleting an unknown comment -> 404",
+          await be.respond(method: "DELETE", url: url("/api/block/comments/999999"), body: nil).status == 404)
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

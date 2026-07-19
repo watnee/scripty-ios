@@ -13,6 +13,9 @@ import UIKit
 struct EditableBlockRow: View {
     let model: ScriptModel
     let block: Block
+    /// Opens the comment thread for an element. Handed in so the sheet lives
+    /// on the script view rather than one per row.
+    var onComment: (Block) -> Void = { _ in }
 
     /// The writer's chosen type size. Scaling the column along with the type
     /// keeps the same number of characters on a line, so the shape of the page
@@ -42,6 +45,15 @@ struct EditableBlockRow: View {
 
     @ViewBuilder
     private var contextMenu: some View {
+        // Commenting needs only read access, so it sits above the editing
+        // actions and appears even when none of them do.
+        if block.hasLink(.comments) {
+            Button {
+                onComment(block)
+            } label: {
+                Label("Comments", systemImage: "bubble.left")
+            }
+        }
         // Reordering lives in the context menu rather than on a drag handle:
         // the script is a LazyVStack, so rows outside the rendered window
         // don't exist as drop targets and a drag-to-reorder gesture would
