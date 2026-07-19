@@ -41,6 +41,13 @@ struct BulkActionBar: View {
     let model: ScriptModel
     @Bindable var selection: BlockSelectionModel
 
+    /// What select-all reaches. The web app's select-all honours an active
+    /// search filter — "all" means all the writer can see — but the iPad
+    /// search walks hits instead of filtering rows out, so the caller decides
+    /// what "all" currently means and says whether it narrowed the set.
+    let selectableIds: [Int]
+    let isFiltered: Bool
+
     @State private var isTagging = false
     @State private var tagText = ""
     @State private var confirmDelete = false
@@ -54,6 +61,8 @@ struct BulkActionBar: View {
                     .font(.subheadline.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(selection.isEmpty ? .secondary : .primary)
+
+                selectAllButton
 
                 Spacer(minLength: 0)
 
@@ -97,6 +106,35 @@ struct BulkActionBar: View {
         .onChange(of: model.blocks) { _, blocks in
             selection.prune(toExisting: blocks.map(\.id))
         }
+    }
+
+    /// One button rather than a separate Select All and Deselect All: once
+    /// everything is selected the only useful move is to start over, and a
+    /// disabled button there would just be dead weight in a crowded bar.
+    @ViewBuilder
+    private var selectAllButton: some View {
+        if !selectableIds.isEmpty && !isWorking {
+            Button(selectAllLabel) {
+                if isEverythingSelected {
+                    selection.clear()
+                } else {
+                    selection.selectAll(selectableIds)
+                }
+            }
+            .font(.subheadline)
+        }
+    }
+
+    /// True only when the selection already covers everything select-all would
+    /// add. Tested by containment rather than by count, because a selection
+    /// made before a search was typed can be larger than the filtered set.
+    private var isEverythingSelected: Bool {
+        selection.selected.isSuperset(of: selectableIds)
+    }
+
+    private var selectAllLabel: String {
+        if isEverythingSelected { return "Deselect All" }
+        return isFiltered ? "Select Matches" : "Select All"
     }
 
     @ViewBuilder

@@ -247,8 +247,26 @@ struct ScriptView: View {
     @ViewBuilder
     private var bulkBar: some View {
         if selection.isSelecting {
-            BulkActionBar(model: model, selection: selection)
+            BulkActionBar(model: model,
+                          selection: selection,
+                          selectableIds: selectableIds,
+                          isFiltered: isSearchNarrowingSelection)
         }
+    }
+
+    /// A live search narrows what select-all means, matching the web app,
+    /// where selecting all while filtered selects only the rows on screen.
+    private var isSearchNarrowingSelection: Bool {
+        isSearching && search.hasQuery && search.hasMatches
+    }
+
+    /// Selecting all reaches the search hits while a search is running and the
+    /// whole script otherwise. A query that matches nothing deliberately
+    /// leaves the set empty rather than silently selecting everything.
+    private var selectableIds: [Int] {
+        guard isSearching && search.hasQuery else { return model.blocks.map(\.id) }
+        let hits = Set(search.matches.map(\.blockId))
+        return model.blocks.map(\.id).filter { hits.contains($0) }
     }
 
     /// The paper surface: read-only sheets with a pager.
