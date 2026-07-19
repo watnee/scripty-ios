@@ -9,9 +9,15 @@
 import Foundation
 
 /// A single HAL link object (`{"href": "..."}`).
-struct HALLink: Codable, Hashable, Sendable {
+///
+/// Identifiable by its href, so a screen can be presented from a link the
+/// server advertised rather than from a flag — the sheet then cannot open
+/// before the server has said where it leads.
+struct HALLink: Codable, Hashable, Sendable, Identifiable {
     let href: String
     var templated: Bool?
+
+    var id: String { href }
 
     init(href: String, templated: Bool? = nil) {
         self.href = href

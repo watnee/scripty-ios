@@ -37,6 +37,9 @@ struct ProjectsSidebarView: View {
 
     @State private var showingCreate = false
     @State private var showingImporter = false
+    /// Presented by link rather than by flag, so the sheet cannot open before
+    /// the server has said where the trash is.
+    @State private var trashLink: HALLink?
     @State private var renamingProject: Project?
     @State private var searchText = ""
     @AppStorage("projectListSort") private var sortMode = ProjectSort.lastEdited
@@ -146,6 +149,15 @@ struct ProjectsSidebarView: View {
                 }
                 .pickerStyle(.menu)
             }
+            if let trash = model.collectionLinks[.trash] {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        trashLink = trash
+                    } label: {
+                        Label("Recently Deleted", systemImage: "trash")
+                    }
+                }
+            }
             ToolbarItem(placement: .secondaryAction) {
                 Button(role: .destructive) {
                     app.signOut()
@@ -154,6 +166,17 @@ struct ProjectsSidebarView: View {
                           systemImage: "rectangle.portrait.and.arrow.right")
                 }
             }
+        }
+        .sheet(item: $trashLink) { link in
+            TrashView<TrashedProject, TrashedProjectRow>(
+                app: app,
+                source: link,
+                title: "Recently Deleted",
+                emptyMessage: "Screenplays you delete can be restored from here.",
+                // A restored screenplay belongs back in the list behind us.
+                onChanged: { await model.refresh() }) { project in
+                    TrashedProjectRow(project: project)
+                }
         }
         .sheet(isPresented: $showingCreate) {
             ProjectTitleSheet(title: "", heading: "New Project") { title in

@@ -21,6 +21,8 @@ struct ScriptView: View {
     @State private var showingRead = false
     @State private var showingPageSetup = false
     @State private var showingVersions = false
+    /// Presented from the link the block collection advertised.
+    @State private var trashLink: HALLink?
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
     @State private var selection = BlockSelectionModel()
@@ -69,6 +71,21 @@ struct ScriptView: View {
         }
         .sheet(isPresented: $showingPageSetup) {
             PageSetupSheet(settings: settings)
+        }
+        .sheet(item: $trashLink) { link in
+            TrashView<DeletedBlock, DeletedBlockRow>(
+                app: model.app,
+                source: link,
+                title: "Deleted Elements",
+                emptyMessage: "Elements you delete can be restored from here.",
+                // A restored element rejoins the script behind us.
+                onChanged: {
+                    await model.loadBlocks()
+                    await model.refreshUndoRedo()
+                    repaginate()
+                }) { block in
+                    DeletedBlockRow(block: block)
+                }
         }
         .sheet(isPresented: $showingVersions) {
             VersionHistoryView(app: model.app, project: model.project) {
@@ -336,6 +353,14 @@ struct ScriptView: View {
                         showingVersions = true
                     } label: {
                         Label("Version History", systemImage: "clock.arrow.circlepath")
+                    }
+                }
+
+                if let trash = model.blocksLinks[.trash] {
+                    Button {
+                        trashLink = trash
+                    } label: {
+                        Label("Deleted Elements", systemImage: "trash")
                     }
                 }
 

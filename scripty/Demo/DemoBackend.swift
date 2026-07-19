@@ -81,6 +81,9 @@ actor DemoBackend {
     private var undoStacks: [Int: [[DemoBlock]]] = [:]
     private var versions: [Int: [DemoVersion]] = [:]
     private var nextVersionId = 1
+    private var trashedProjects: [TrashedDemoProject] = []
+    private var deletedBlocks: [Int: [DeletedDemoBlock]] = [:]
+    private var nextDeletedBlockId = 1
     private var redoStacks: [Int: [[DemoBlock]]] = [:]
     private var defaultProjectId: Int?
     private var nextProjectId = 1
@@ -141,11 +144,12 @@ actor DemoBackend {
             return routeVersion(method: method, path: Array(path.dropFirst()),
                                 query: query, fields: fields)
         }
+        if path.first == "trash" {
+            return routeProjectTrash(method: method, path: Array(path.dropFirst()))
+        }
         switch (method, path.count) {
         case ("GET", 0):
-            return ok(["_embedded": ["projectResourceList": projects.map(projectJSON)],
-                       "_links": ["self": link("/api/project"),
-                                  "importProject": link("/api/project/import")]])
+            return projectCollection()
         case ("POST", 0):
             guard let title = fields["title"] as? String else { return badRequest("title") }
             let project = DemoProject(id: nextProjectId, title: title, lastEdited: .now)
@@ -178,7 +182,15 @@ actor DemoBackend {
         case ("POST", "import-script"):
             return demoImportScript(projectId: id, body: body)
         case ("DELETE", nil):
+            // A soft delete, as on the server: everything belonging to the
+            // project is kept aside so a restore can bring it back whole.
             let removed = projects.remove(at: index)
+            trashedProjects.append(TrashedDemoProject(
+                project: removed,
+                deletedAt: Date(),
+                blocks: blocks[removed.id] ?? [],
+                people: people[removed.id] ?? [],
+                documents: documents[removed.id] ?? []))
             blocks[removed.id] = nil
             people[removed.id] = nil
             documents[removed.id] = nil
@@ -201,9 +213,7 @@ actor DemoBackend {
             return (200, Data(fountainExport(projects[index]).utf8))
         case ("POST", "toggleDefault"):
             defaultProjectId = (defaultProjectId == id) ? nil : id
-            return ok(["_embedded": ["projectResourceList": projects.map(projectJSON)],
-                       "_links": ["self": link("/api/project"),
-                                  "importProject": link("/api/project/import")]])
+            return projectCollection()
         default:
             return notFound()
         }
@@ -403,6 +413,12 @@ actor DemoBackend {
             break
         }
 
+        // `/api/block/trash…` is a sibling of the block resources, not a block
+        // id, so it is picked off before the numeric lookup.
+        if path.first == "trash" {
+            return routeBlockTrash(method: method, path: Array(path.dropFirst()), query: query)
+        }
+
         guard let id = path.first.flatMap(Int.init),
               let (projectId, index) = locateBlock(id) else { return notFound() }
 
@@ -464,7 +480,9 @@ actor DemoBackend {
                        "_links": ["self": link("/api/block?projectId=\(projectId)")]])
         case ("DELETE", nil):
             snapshot(projectId)
-            blocks[projectId]?.remove(at: index)
+            if let removed = blocks[projectId]?.remove(at: index) {
+                trashBlock(removed, projectId: projectId)
+            }
             touch(projectId)
             return ok([:])
         case ("POST", "bookmark"):
@@ -809,6 +827,174 @@ actor DemoBackend {
     // MARK: - Undo / redo
 
     /// History is snapshot-based: good enough for a demo, invisible to the UI.
+    // MARK: - Trash
+
+    /// A deleted screenplay, kept whole so a restore returns everything.
+    private struct TrashedDemoProject {
+        var project: DemoProject
+        var deletedAt: Date
+        var blocks: [DemoBlock]
+        var people: [DemoPerson]
+        var documents: [DemoDocument]
+    }
+
+    /// A deleted element. Restoring makes a *new* element at the old position —
+    /// the original id does not come back, matching the server.
+    private struct DeletedDemoBlock {
+        var id: Int
+        var block: DemoBlock
+        var deletedAt: Date
+    }
+
+    /// Elements are recoverable for thirty days, as on the server.
+    private static let trashRetentionDays = 30
+
+    private func trashBlock(_ block: DemoBlock, projectId: Int) {
+        deletedBlocks[projectId, default: []].append(
+            DeletedDemoBlock(id: nextDeletedBlockId, block: block, deletedAt: Date()))
+        nextDeletedBlockId += 1
+    }
+
+    private func routeBlockTrash(method: String, path: [String],
+                                 query: [String: String]) -> (Int, Data) {
+        guard let projectId = query["projectId"].flatMap(Int.init),
+              blocks[projectId] != nil else { return badRequest("projectId") }
+
+        if method == "GET", path.isEmpty {
+            return blockTrashCollection(projectId)
+        }
+
+        guard let deletedId = path.first.flatMap(Int.init),
+              let index = deletedBlocks[projectId]?.firstIndex(where: { $0.id == deletedId })
+        else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("POST", "restore"):
+            let record = deletedBlocks[projectId]!.remove(at: index)
+            snapshot(projectId)
+            var restored = record.block
+            restored.id = nextBlockId
+            nextBlockId += 1
+            var list = blocks[projectId] ?? []
+            // Back at the position it held, clamped in case the script shrank.
+            let target = min(max(restored.order - 1, 0), list.count)
+            list.insert(restored, at: target)
+            for i in list.indices { list[i].order = i + 1 }
+            blocks[projectId] = list
+            touch(projectId)
+            return blockTrashCollection(projectId)
+
+        case ("DELETE", nil):
+            deletedBlocks[projectId]?.remove(at: index)
+            return blockTrashCollection(projectId)
+
+        default:
+            return notFound()
+        }
+    }
+
+    private func blockTrashCollection(_ projectId: Int) -> (Int, Data) {
+        let items = (deletedBlocks[projectId] ?? [])
+            .sorted { $0.deletedAt > $1.deletedAt }
+            .map { record -> [String: Any] in
+                let content = record.block.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                var json: [String: Any] = [
+                    "id": record.id,
+                    "empty": content.isEmpty,
+                    "typeLabel": record.block.type.capitalized,
+                    "deletedAt": iso.string(from: record.deletedAt),
+                    "purgeAt": iso.string(from: record.deletedAt.addingTimeInterval(
+                        Double(Self.trashRetentionDays) * 86_400)),
+                    "deletedByName": "You",
+                    "_links": [
+                        "restore": link("/api/block/trash/\(record.id)/restore?projectId=\(projectId)"),
+                        "purge": link("/api/block/trash/\(record.id)?projectId=\(projectId)"),
+                        "trash": link("/api/block/trash?projectId=\(projectId)"),
+                    ],
+                ]
+                if !content.isEmpty { json["preview"] = String(content.prefix(120)) }
+                return json
+            }
+        return ok([
+            "_embedded": ["deletedBlockResourceList": items],
+            "_links": [
+                "self": link("/api/block/trash?projectId=\(projectId)"),
+                "blocks": link("/api/block?projectId=\(projectId)"),
+                "project": link("/api/project/\(projectId)"),
+            ],
+        ])
+    }
+
+    private func routeProjectTrash(method: String, path: [String]) -> (Int, Data) {
+        if path.isEmpty {
+            switch method {
+            case "GET":
+                return projectTrashCollection()
+            case "DELETE":
+                trashedProjects.removeAll()
+                return projectTrashCollection()
+            default:
+                return notFound()
+            }
+        }
+
+        guard let projectId = path.first.flatMap(Int.init),
+              let index = trashedProjects.firstIndex(where: { $0.project.id == projectId })
+        else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("POST", "restore"):
+            let record = trashedProjects.remove(at: index)
+            projects.append(record.project)
+            projects.sort { $0.id < $1.id }
+            blocks[record.project.id] = record.blocks
+            people[record.project.id] = record.people
+            documents[record.project.id] = record.documents
+            return projectTrashCollection()
+
+        case ("DELETE", nil):
+            trashedProjects.remove(at: index)
+            return projectTrashCollection()
+
+        default:
+            return notFound()
+        }
+    }
+
+    private func projectTrashCollection() -> (Int, Data) {
+        let items = trashedProjects
+            .sorted { $0.deletedAt > $1.deletedAt }
+            .map { record -> [String: Any] in
+                [
+                    "id": record.project.id,
+                    "title": record.project.title,
+                    "deletedAt": iso.string(from: record.deletedAt),
+                    "_links": [
+                        "restore": link("/api/project/trash/\(record.project.id)/restore"),
+                        "purge": link("/api/project/trash/\(record.project.id)"),
+                        "trash": link("/api/project/trash"),
+                    ],
+                ]
+            }
+        var links: [String: Any] = [
+            "self": link("/api/project/trash"),
+            "projects": link("/api/project"),
+        ]
+        if !items.isEmpty {
+            links["emptyTrash"] = link("/api/project/trash")
+        }
+        return ok(["_embedded": ["trashedProjectResourceList": items], "_links": links])
+    }
+
+    private func projectCollection() -> (Int, Data) {
+        ok(["_embedded": ["projectResourceList": projects.map(projectJSON)],
+            "_links": [
+                "self": link("/api/project"),
+                "importProject": link("/api/project/import"),
+                "trash": link("/api/project/trash"),
+            ]])
+    }
+
     // MARK: - Version history
 
     /// A saved snapshot. Holds the blocks themselves, so restoring is just
@@ -1016,6 +1202,9 @@ actor DemoBackend {
             links["bulkDelete"] = link("/api/block/bulk/delete")
             links["bulkReplace"] = link("/api/block/bulk/replace")
         }
+        // Offered even for an empty script — that is exactly when everything
+        // has just been deleted.
+        links["trash"] = link("/api/block/trash?projectId=\(projectId)")
         return ok(["_embedded": ["blockResourceList": items], "_links": links])
     }
 
@@ -1063,6 +1252,9 @@ actor DemoBackend {
             }
 
         case "delete":
+            for removed in (blocks[projectId] ?? []) where targets.contains(removed.id) {
+                trashBlock(removed, projectId: projectId)
+            }
             blocks[projectId]?.removeAll { targets.contains($0.id) }
             var list = (blocks[projectId] ?? []).sorted { $0.order < $1.order }
             for i in list.indices { list[i].order = i + 1 }

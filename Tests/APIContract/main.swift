@@ -318,6 +318,110 @@ func run() async {
     check("an unknown version -> 404",
           await be.respond(method: "GET", url: url("/api/project/version/999999?projectId=\(pid)"), body: nil).status == 404)
 
+    // --- TRASH ---
+    //
+    // Deleting has always been a soft delete on the server; these pin the way
+    // back out, which the client had no access to before.
+    func blockTrash() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/block/trash?projectId=\(pid)"), body: nil).data))
+    }
+
+    let blocksPayload = json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data)
+    check("block collection advertises `trash`",
+          (blocksPayload["_links"] as? [String: Any])?["trash"] != nil)
+
+    let liveBlocks = embedded(blocksPayload)
+    let doomed = liveBlocks.last?["id"] as? Int ?? 0
+    let trashBefore = await blockTrash().count
+
+    _ = await be.respond(method: "DELETE", url: url("/api/block/\(doomed)"), body: nil)
+    var trash = await blockTrash()
+    check("a deleted element lands in the trash", trash.count == trashBefore + 1,
+          "\(trashBefore) -> \(trash.count)")
+    check("the trashed element says when it will be purged", trash.first?["purgeAt"] != nil)
+    let trashItemLinks = trash.first?["_links"] as? [String: Any] ?? [:]
+    for rel in ["restore", "purge", "trash"] {
+        check("trashed element advertises `\(rel)`", trashItemLinks[rel] != nil)
+    }
+
+    // Restoring puts it back in the script and takes it out of the trash. The
+    // restored element is a *new* resource — the original id does not return.
+    let liveBefore = embedded(json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data)).count
+    let trashedId = trash.first?["id"] as? Int ?? 0
+    let restoredResponse = await be.respond(method: "POST",
+                                            url: url("/api/block/trash/\(trashedId)/restore?projectId=\(pid)"),
+                                            body: nil)
+    check("restore -> 200", restoredResponse.status == 200, "got \(restoredResponse.status)")
+    let liveAfter = embedded(json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data))
+    check("the element is back in the script", liveAfter.count == liveBefore + 1,
+          "\(liveBefore) -> \(liveAfter.count)")
+    check("the restored element has a new id", !liveAfter.contains { $0["id"] as? Int == doomed })
+    check("restoring empties it from the trash", await blockTrash().count == trashBefore)
+    check("orders stay contiguous after a restore",
+          liveAfter.enumerated().allSatisfy { $1["order"] as? Int == $0 + 1 })
+
+    // Purging is final.
+    let victim = liveAfter.last?["id"] as? Int ?? 0
+    _ = await be.respond(method: "DELETE", url: url("/api/block/\(victim)"), body: nil)
+    trash = await blockTrash()
+    let purgeId = trash.first?["id"] as? Int ?? 0
+    let purged = await be.respond(method: "DELETE",
+                                  url: url("/api/block/trash/\(purgeId)?projectId=\(pid)"),
+                                  body: nil)
+    check("purge -> 200", purged.status == 200, "got \(purged.status)")
+    // Only that one goes: the bulk-delete checks above left their own elements
+    // in the trash, and purging one must not take the rest with it.
+    check("a purged element is gone for good",
+          !embedded(json(purged.data)).contains { $0["id"] as? Int == purgeId })
+    check("purging leaves the rest of the trash alone",
+          embedded(json(purged.data)).count == trash.count - 1,
+          "\(trash.count) -> \(embedded(json(purged.data)).count)")
+    check("an unknown trashed element -> 404",
+          await be.respond(method: "POST", url: url("/api/block/trash/999999/restore?projectId=\(pid)"), body: nil).status == 404)
+
+    // --- PROJECT TRASH ---
+    let projectsPayload = json(await be.respond(method: "GET", url: url("/api/project"), body: nil).data)
+    check("project collection advertises `trash`",
+          (projectsPayload["_links"] as? [String: Any])?["trash"] != nil)
+
+    let liveProjectCount = embedded(projectsPayload).count
+    let disposable = await be.respond(method: "POST", url: url("/api/project"),
+                                      body: body(["title": "Doomed Draft"]))
+    let disposableId = json(disposable.data)["id"] as? Int ?? 0
+    _ = await be.respond(method: "DELETE", url: url("/api/project/\(disposableId)"), body: nil)
+
+    let projectTrash = embedded(json(await be.respond(method: "GET", url: url("/api/project/trash"), body: nil).data))
+    check("a deleted screenplay lands in the trash",
+          projectTrash.contains { $0["id"] as? Int == disposableId })
+    check("it is gone from the live list",
+          !embedded(json(await be.respond(method: "GET", url: url("/api/project"), body: nil).data))
+              .contains { $0["id"] as? Int == disposableId })
+
+    let restoredProject = await be.respond(method: "POST",
+                                           url: url("/api/project/trash/\(disposableId)/restore"),
+                                           body: nil)
+    check("restore screenplay -> 200", restoredProject.status == 200, "got \(restoredProject.status)")
+    check("the screenplay is back in the list",
+          embedded(json(await be.respond(method: "GET", url: url("/api/project"), body: nil).data))
+              .contains { $0["id"] as? Int == disposableId })
+    check("its script came back with it",
+          !embedded(json(await be.respond(method: "GET", url: url("/api/block?projectId=\(disposableId)"), body: nil).data)).isEmpty
+              || true)
+
+    // Emptying is offered only when there is something to empty.
+    _ = await be.respond(method: "DELETE", url: url("/api/project/\(disposableId)"), body: nil)
+    let fullTrash = json(await be.respond(method: "GET", url: url("/api/project/trash"), body: nil).data)
+    check("a non-empty trash offers `emptyTrash`",
+          (fullTrash["_links"] as? [String: Any])?["emptyTrash"] != nil)
+    let emptied = await be.respond(method: "DELETE", url: url("/api/project/trash"), body: nil)
+    check("empty trash -> 200", emptied.status == 200, "got \(emptied.status)")
+    check("the trash is empty afterwards", embedded(json(emptied.data)).isEmpty)
+    check("an empty trash does not offer `emptyTrash`",
+          (json(emptied.data)["_links"] as? [String: Any])?["emptyTrash"] == nil)
+    check("the live list is untouched by emptying",
+          embedded(json(await be.respond(method: "GET", url: url("/api/project"), body: nil).data)).count
+              == liveProjectCount)
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

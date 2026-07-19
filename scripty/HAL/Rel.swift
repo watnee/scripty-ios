@@ -66,4 +66,9 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let versions = Rel("versions")
     static let restore = Rel("restore")
     static let create = Rel("create")
+
+    // Recovery. Each collection that can lose things points at its own trash.
+    static let trash = Rel("trash")
+    static let purge = Rel("purge")
+    static let emptyTrash = Rel("emptyTrash")
 }
