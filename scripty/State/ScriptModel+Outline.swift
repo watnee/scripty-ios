@@ -1,0 +1,32 @@
+//
+//  ScriptModel+Outline.swift
+//  scripty
+//
+//  Derived views of the already-loaded blocks: statistics, the outline lists,
+//  and the bookmark/pin filters. All computed client-side — none of this costs
+//  a request, so none of it is link-gated; it is simply hidden while the
+//  script is empty.
+//
+
+import Foundation
+
+extension ScriptModel {
+    /// Screenplay statistics for the blocks currently loaded.
+    var stats: ScriptStats { ScriptStats(blocks: blocks) }
+
+    /// Outline, character, location and song navigation lists.
+    var outline: ScriptOutline { ScriptOutline(blocks: blocks) }
+
+    /// Blocks the writer flagged, in document order.
+    var bookmarkedBlocks: [Block] { blocks.filter(\.isBookmarked) }
+
+    /// Blocks the writer pinned, in document order.
+    var pinnedBlocks: [Block] { blocks.filter(\.isPinned) }
+
+    /// True once there is anything worth navigating or measuring.
+    var hasScriptContent: Bool { !blocks.isEmpty }
+
+    func block(id: Int) -> Block? {
+        blocks.first { $0.id == id }
+    }
+}

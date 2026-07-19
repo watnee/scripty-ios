@@ -139,10 +139,10 @@ struct BlockRowView: View {
     }
 
     private var alignment: Alignment {
-        switch block.textAlign {
-        case "CENTER": return .center
-        case "RIGHT": return .trailing
-        default: return .leading
+        switch TextAlign(serverValue: block.textAlign) {
+        case .center: return .center
+        case .right: return .trailing
+        case .left, .none: return .leading
         }
     }
 
@@ -156,10 +156,12 @@ struct BlockRowView: View {
     }
 
     private var baseFont: Font {
-        switch block.font {
-        case "ARIAL", "TIMES_NEW_ROMAN":
-            return .system(size: 16)
-        default:
+        switch ScriptFont(serverValue: block.font) {
+        case .arial:
+            return .custom("Helvetica", size: 16)
+        case .timesNewRoman:
+            return .custom("Times New Roman", size: 16)
+        case .courierPrime, .none:
             // Screenplay convention: Courier-style monospace.
             return .system(size: 16, design: .monospaced)
         }

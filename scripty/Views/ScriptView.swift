@@ -14,26 +14,42 @@ struct ScriptView: View {
     @State private var model: ScriptModel
     @State private var showingCharacters = false
     @State private var showingSongs = false
+    @State private var showingTitlePage = false
+    @State private var showingOutline = false
+    @State private var showingStats = false
+    @State private var isSearching = false
+    @State private var navigator = ScriptNavigator()
+    @State private var search = ScriptSearchModel()
 
     init(app: AppModel, project: Project) {
         _model = State(initialValue: ScriptModel(app: app, project: project))
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(model.blocks) { block in
-                    row(for: block)
-                        .padding(.horizontal, 24)
-                        .id(block.id)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.blocks) { block in
+                        row(for: block)
+                            .padding(.horizontal, 24)
+                            .id(block.id)
+                    }
                 }
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
+            .onChange(of: navigator.pendingScrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation { proxy.scrollTo(target, anchor: .center) }
+                // Clearing the target is what lets the same block be jumped
+                // to twice in a row.
+                navigator.consumeScrollTarget()
+            }
         }
         .scrollDismissesKeyboard(.interactively)
         .overlay { emptyState }
-        .safeAreaInset(edge: .bottom) { typeBar }
+        .safeAreaInset(edge: .bottom) { editingBars }
+        .safeAreaInset(edge: .bottom) { searchBar }
         .navigationTitle(model.project.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -51,6 +67,17 @@ struct ScriptView: View {
         }
         .sheet(isPresented: $showingSongs) {
             SongsView(model: model)
+        }
+        .sheet(isPresented: $showingTitlePage) {
+            TitlePageView(app: model.app, project: model.project) { updated in
+                model.adopt(updated)
+            }
+        }
+        .sheet(isPresented: $showingOutline) {
+            ScriptOutlineView(model: model, navigator: navigator)
+        }
+        .sheet(isPresented: $showingStats) {
+            ScriptStatsView(model: model)
         }
         .alert("Error", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
@@ -94,12 +121,30 @@ struct ScriptView: View {
         }
     }
 
+    /// Formatting sits above the element-type bar, both only while a block is
+    /// focused and only for the affordances the server actually advertised.
     @ViewBuilder
-    private var typeBar: some View {
+    private var editingBars: some View {
         if let id = model.focusedBlockId,
-           let block = model.blocks.first(where: { $0.id == id }),
-           block.hasLink(.setType) {
-            ElementTypeBar(model: model, block: block)
+           let block = model.blocks.first(where: { $0.id == id }) {
+            VStack(spacing: 0) {
+                if block.hasLink(.update) {
+                    FormatBar(model: model, block: block)
+                    Divider()
+                }
+                if block.hasLink(.setType) {
+                    ElementTypeBar(model: model, block: block)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var searchBar: some View {
+        if isSearching {
+            ScriptSearchBar(model: model, navigator: navigator, search: search) {
+                isSearching = false
+            }
         }
     }
 
@@ -110,6 +155,23 @@ struct ScriptView: View {
                 Task { await model.appendBlock() }
             } label: {
                 Label("Add Element", systemImage: "plus")
+            }
+
+            if model.hasScriptContent {
+                Button {
+                    isSearching.toggle()
+                    if !isSearching { search.clear() }
+                } label: {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button {
+                    showingOutline = true
+                } label: {
+                    Label("Outline", systemImage: "list.bullet.indent")
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             }
 
             if model.canViewCharacters {
@@ -130,6 +192,30 @@ struct ScriptView: View {
 
             if !model.exportOptions.isEmpty {
                 ExportButton(model: model)
+            }
+        }
+
+        // Front matter, import and stats are occasional actions — they live in
+        // the overflow so the writing controls stay reachable on iPhone width.
+        ToolbarItemGroup(placement: .secondaryAction) {
+            Button {
+                showingTitlePage = true
+            } label: {
+                Label("Title Page", systemImage: "doc.text")
+            }
+
+            if model.hasScriptContent {
+                Button {
+                    showingStats = true
+                } label: {
+                    Label("Script Stats", systemImage: "chart.bar")
+                }
+            }
+
+            ScriptImportButton(app: model.app, project: model.project) { updated in
+                model.adopt(updated)
+                await model.loadBlocks()
+                await model.refreshUndoRedo()
             }
         }
 

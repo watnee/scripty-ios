@@ -38,6 +38,12 @@ struct CreateProjectCommand: Encodable {
 }
 
 /// Omitting `teamIds` leaves team assignments untouched on the server.
+/// The title-page fields are likewise left alone when nil, so a rename does
+/// not wipe the front matter and vice versa.
 struct EditProjectCommand: Encodable {
     var title: String
+    var screenplayTitle: String?
+    var writers: String?
+    var contactInfo: String?
+    var screenplayVersion: String?
 }

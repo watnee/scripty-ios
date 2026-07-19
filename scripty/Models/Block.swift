@@ -131,11 +131,59 @@ struct CreateBlockCommand: Encodable {
     var type: String
 }
 
-/// The API does not allow changing a block's type after a plain PUT.
+/// A plain PUT cannot change a block's type — use `SetTypeCommand` for that.
+/// The formatting fields are only sent when set; nil leaves the server value
+/// untouched, so a text auto-save never clobbers the writer's formatting.
 struct EditBlockCommand: Encodable {
     var content: String
     var personId: Int?
     var tags: String?
+    var textAlign: String?
+    var font: String?
+    var textBold: Bool?
+    var textItalic: Bool?
+    var textUnderline: Bool?
+}
+
+/// Reorder a block (rel `move`). `position` is the absolute `order` the block
+/// should end up at, matching what the block collection reports.
+struct MoveBlockCommand: Encodable {
+    var position: Int
+}
+
+/// Horizontal alignment a writer can apply to an element.
+enum TextAlign: String, CaseIterable, Identifiable {
+    case left = "left"
+    case center = "center"
+    case right = "right"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .left: return "Left"
+        case .center: return "Center"
+        case .right: return "Right"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .left: return "text.alignleft"
+        case .center: return "text.aligncenter"
+        case .right: return "text.alignright"
+        }
+    }
+}
+
+/// The three typefaces the web editor offers.
+enum ScriptFont: String, CaseIterable, Identifiable {
+    case courierPrime = "Courier Prime"
+    case arial = "Arial"
+    case timesNewRoman = "Times New Roman"
+
+    var id: String { rawValue }
+    var label: String { rawValue }
 }
 
 /// Insert a new element directly beneath an existing block (rel `createBelow`).

@@ -11,6 +11,16 @@ struct CharactersView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editingPerson: Person?
     @State private var showingCreate = false
+    @State private var showingActors = false
+    /// Owns the project's cast so both the Casting screen and the per-character
+    /// picker read the same list. Hidden entirely when the server doesn't
+    /// advertise actors or answers 403 for them.
+    @State private var casting: CastingModel
+
+    init(model: ScriptModel) {
+        self.model = model
+        _casting = State(initialValue: CastingModel(app: model.app, project: model.project))
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,7 +38,7 @@ struct CharactersView: View {
                                 if let fullName = person.fullName, fullName != person.name {
                                     Text(fullName)
                                 }
-                                if let actorName = person.actorName {
+                                if let actorName = castName(for: person) {
                                     Text("· played by \(actorName)")
                                 }
                             }
@@ -62,7 +72,14 @@ struct CharactersView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if casting.isAvailable {
+                        Button {
+                            showingActors = true
+                        } label: {
+                            Label("Casting", systemImage: "person.crop.rectangle.stack")
+                        }
+                    }
                     Button {
                         showingCreate = true
                     } label: {
@@ -70,31 +87,46 @@ struct CharactersView: View {
                     }
                 }
             }
+            .task { await casting.loadIfNeeded() }
             .sheet(isPresented: $showingCreate) {
-                CharacterEditorSheet(model: model, person: nil)
+                CharacterEditorSheet(model: model, casting: casting, person: nil)
             }
             .sheet(item: $editingPerson) { person in
-                CharacterEditorSheet(model: model, person: person)
+                CharacterEditorSheet(model: model, casting: casting, person: person)
+            }
+            .sheet(isPresented: $showingActors) {
+                ActorsView(casting: casting)
             }
         }
+    }
+
+    /// Prefer the name the server sent with the character; fall back to the
+    /// loaded cast so a just-changed assignment shows before the next reload.
+    private func castName(for person: Person) -> String? {
+        person.actorName ?? casting.actor(id: person.actorId)?.displayName
     }
 }
 
 private struct CharacterEditorSheet: View {
     let model: ScriptModel
+    let casting: CastingModel
     let person: Person?   // nil = create
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var fullName: String
+    /// nil = "Not cast".
+    @State private var actorId: Int?
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    init(model: ScriptModel, person: Person?) {
+    init(model: ScriptModel, casting: CastingModel, person: Person?) {
         self.model = model
+        self.casting = casting
         self.person = person
         _name = State(initialValue: person?.name ?? "")
         _fullName = State(initialValue: person?.fullName ?? "")
+        _actorId = State(initialValue: person?.actorId)
     }
 
     private var canSave: Bool {
@@ -108,6 +140,14 @@ private struct CharacterEditorSheet: View {
             Form {
                 TextField("Name (as written in script)", text: $name)
                 TextField("Full name", text: $fullName)
+                if casting.isAvailable {
+                    Picker("Cast", selection: $actorId) {
+                        Text("Not cast").tag(Int?.none)
+                        ForEach(casting.actors) { actor in
+                            Text(actor.displayName).tag(Int?.some(actor.id))
+                        }
+                    }
+                }
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
@@ -115,6 +155,7 @@ private struct CharacterEditorSheet: View {
             }
             .navigationTitle(person == nil ? "New Character" : "Edit Character")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await casting.loadIfNeeded() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -139,11 +180,16 @@ private struct CharacterEditorSheet: View {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedFullName = fullName.trimmingCharacters(in: .whitespaces)
         Task {
+            // A nil actorId clears the casting; when the section is unavailable
+            // we pass the existing assignment straight back through.
+            let cast = casting.isAvailable ? actorId : person?.actorId
             let succeeded: Bool
             if let person {
-                succeeded = await model.updateCharacter(person, name: trimmedName, fullName: trimmedFullName)
+                succeeded = await model.updateCharacter(person, name: trimmedName,
+                                                        fullName: trimmedFullName, actorId: cast)
             } else {
-                succeeded = await model.createCharacter(name: trimmedName, fullName: trimmedFullName)
+                succeeded = await model.createCharacter(name: trimmedName,
+                                                        fullName: trimmedFullName, actorId: cast)
             }
             isSaving = false
             if succeeded {

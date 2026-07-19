@@ -32,6 +32,25 @@ struct EditableBlockRow: View {
 
     @ViewBuilder
     private var contextMenu: some View {
+        // Reordering lives in the context menu rather than on a drag handle:
+        // the script is a LazyVStack, so rows outside the rendered window
+        // don't exist as drop targets and a drag-to-reorder gesture would
+        // also fight the text view's own selection drag. A menu pair is
+        // reliable at any scroll position and works with VoiceOver.
+        if model.canMoveUp(block) {
+            Button {
+                Task { await model.moveBlockUp(block) }
+            } label: {
+                Label("Move Up", systemImage: "arrow.up")
+            }
+        }
+        if model.canMoveDown(block) {
+            Button {
+                Task { await model.moveBlockDown(block) }
+            } label: {
+                Label("Move Down", systemImage: "arrow.down")
+            }
+        }
         if block.hasLink(.togglePinned) {
             Button {
                 Task { await model.togglePinned(block) }
@@ -88,7 +107,16 @@ struct EditableBlockRow: View {
         }
     }
 
+    /// An explicit alignment set by the writer wins; otherwise the element
+    /// type's screenplay-convention default applies.
     private var nsAlignment: NSTextAlignment {
+        if let override = TextAlign(serverValue: block.textAlign) {
+            switch override {
+            case .left: return .left
+            case .center: return .center
+            case .right: return .right
+            }
+        }
         switch block.blockType {
         case .character, .dualDialogue, .centered: return .center
         case .transition: return .right
@@ -115,10 +143,12 @@ struct EditableBlockRow: View {
     private var uiFont: UIFont {
         let size: CGFloat = 16
         let base: UIFont
-        switch block.font {
-        case "ARIAL", "TIMES_NEW_ROMAN":
-            base = .systemFont(ofSize: size)
-        default:
+        switch ScriptFont(serverValue: block.font) {
+        case .arial:
+            base = UIFont(name: "Helvetica", size: size) ?? .systemFont(ofSize: size)
+        case .timesNewRoman:
+            base = UIFont(name: "TimesNewRomanPSMT", size: size) ?? .systemFont(ofSize: size)
+        case .courierPrime, .none:
             base = .monospacedSystemFont(ofSize: size, weight: .regular)
         }
 

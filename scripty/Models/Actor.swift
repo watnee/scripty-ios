@@ -26,4 +26,31 @@ struct ScriptyActor: Decodable, Identifiable, Hashable, HALResource {
         let value = [first, last].compactMap { $0 }.joined(separator: " ")
         return value.isEmpty ? "Unnamed" : value
     }
+
+    /// Email preferred, phone as the fallback — what a casting list shows
+    /// under the name.
+    var contactLine: String? {
+        let value = [email, phone]
+            .compactMap { $0 }
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return value.isEmpty ? nil : value.joined(separator: " · ")
+    }
+}
+
+/// `projectIds` associates the new actor with the projects they can be cast
+/// in; the server replaces the whole set on every write.
+struct CreateActorCommand: Encodable {
+    var first: String
+    var last: String
+    var phone: String?
+    var email: String?
+    var projectIds: [Int]
+}
+
+struct EditActorCommand: Encodable {
+    var first: String
+    var last: String
+    var phone: String?
+    var email: String?
+    var projectIds: [Int]
 }

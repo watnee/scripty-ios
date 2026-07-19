@@ -22,6 +22,9 @@ actor DemoBackend {
         var title: String
         var writers: String?
         var lastEdited: Date
+        var screenplayTitle: String?
+        var contactInfo: String?
+        var screenplayVersion: String?
     }
 
     private struct DemoBlock {
@@ -33,12 +36,29 @@ actor DemoBackend {
         var bookmarked = false
         var pinned = false
         var tags: String?
+        var textAlign: String?
+        var font: String?
+        var textBold: Bool?
+        var textItalic: Bool?
+        var textUnderline: Bool?
     }
 
     private struct DemoPerson {
         var id: Int
         var name: String
         var fullName: String
+        var actorId: Int?
+    }
+
+    /// Actors live outside any one project — the same person can be cast in
+    /// several — so they are stored flat and filtered by `projectIds`.
+    private struct DemoActor {
+        var id: Int
+        var first: String
+        var last: String
+        var phone: String?
+        var email: String?
+        var projectIds: [Int]
     }
 
     private struct DemoDocument {
@@ -56,6 +76,7 @@ actor DemoBackend {
     private var blocks: [Int: [DemoBlock]] = [:]      // keyed by project id
     private var people: [Int: [DemoPerson]] = [:]     // keyed by project id
     private var documents: [Int: [DemoDocument]] = [:] // keyed by project id
+    private var actors: [DemoActor] = []
     private var undoStacks: [Int: [[DemoBlock]]] = [:]
     private var redoStacks: [Int: [[DemoBlock]]] = [:]
     private var defaultProjectId: Int?
@@ -63,6 +84,7 @@ actor DemoBackend {
     private var nextBlockId = 1
     private var nextPersonId = 1
     private var nextDocumentId = 1
+    private var nextActorId = 1
     private var seeded = false
 
     // MARK: - Router
@@ -95,6 +117,9 @@ actor DemoBackend {
         case (_, "api", "document"):
             return routeDocument(method: method, path: Array(path.dropFirst(2)),
                                  query: query, fields: fields, body: body)
+        case (_, "api", "actor"):
+            return routeActor(method: method, path: Array(path.dropFirst(2)),
+                              query: query, fields: fields)
         default:
             return notFound()
         }
@@ -132,11 +157,17 @@ actor DemoBackend {
         case ("GET", nil):
             return ok(projectJSON(projects[index]))
         case ("PUT", nil):
-            if let title = fields["title"] as? String {
-                projects[index].title = title
-                projects[index].lastEdited = .now
-            }
+            // Title-page fields follow the same absent-means-unchanged rule as
+            // blocks, so renaming a project never blanks its front matter.
+            if let title = fields["title"] as? String { projects[index].title = title }
+            if let value = fields["screenplayTitle"] as? String { projects[index].screenplayTitle = value }
+            if let value = fields["writers"] as? String { projects[index].writers = value }
+            if let value = fields["contactInfo"] as? String { projects[index].contactInfo = value }
+            if let value = fields["screenplayVersion"] as? String { projects[index].screenplayVersion = value }
+            projects[index].lastEdited = .now
             return ok(projectJSON(projects[index]))
+        case ("POST", "import-script"):
+            return demoImportScript(projectId: id, body: body)
         case ("DELETE", nil):
             let removed = projects.remove(at: index)
             blocks[removed.id] = nil
@@ -194,6 +225,134 @@ actor DemoBackend {
         return ok(projectJSON(project))
     }
 
+    /// Replaces a project's script from an uploaded file. The demo parses only
+    /// plain Fountain — enough to prove the round trip — and rejects anything
+    /// it cannot read as text, the way the server rejects an unparseable file.
+    private func demoImportScript(projectId: Int, body: Data?) -> (Int, Data) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }),
+              let parsed = parseMultipart(body),
+              let fileData = parsed.fileData,
+              let text = String(data: fileData, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return badRequest("file")
+        }
+        snapshot(projectId)
+        var imported: [DemoBlock] = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            imported.append(DemoBlock(id: nextBlockId,
+                                      order: imported.count + 1,
+                                      content: trimmed,
+                                      type: importedType(for: trimmed),
+                                      personId: nil))
+            nextBlockId += 1
+        }
+        guard !imported.isEmpty else { return badRequest("file") }
+        blocks[projectId] = imported
+        touch(projectId)
+        return ok(projectJSON(projects[index]))
+    }
+
+    /// A deliberately small subset of the Fountain heuristics the real importer
+    /// applies — the client-side detector in FountainDetect.swift is the one
+    /// that matters for editing.
+    private func importedType(for line: String) -> String {
+        let upper = line.uppercased()
+        if upper.hasPrefix("INT.") || upper.hasPrefix("EXT.") || upper.hasPrefix("INT/EXT") {
+            return "SCENE"
+        }
+        // `... TO:` is the general form; the terminal transitions have no colon
+        // and would otherwise read as action, since they end in a period and so
+        // fail the character-cue test too.
+        if upper.hasSuffix("TO:") { return "TRANSITION" }
+        if ["FADE OUT.", "FADE TO BLACK.", "FADE IN:", "THE END."].contains(upper) {
+            return "TRANSITION"
+        }
+        if line.hasPrefix("(") && line.hasSuffix(")") { return "PARENTHETICAL" }
+        if line == upper && line.count <= 60 && !line.hasSuffix(".") {
+            return "CHARACTER"
+        }
+        return "ACTION"
+    }
+
+    // MARK: - Actors (casting)
+
+    private func routeActor(method: String, path: [String],
+                            query: [String: String],
+                            fields: [String: Any]) -> (Int, Data) {
+        switch (method, path.count) {
+        case ("GET", 0):
+            let projectId = query["projectId"].flatMap(Int.init)
+            let visible = projectId.map { id in
+                actors.filter { $0.projectIds.contains(id) }
+            } ?? actors
+            let selfHref = projectId.map { "/api/actor?projectId=\($0)" } ?? "/api/actor"
+            return ok(["_embedded": ["actorResourceList": visible.map(actorJSON)],
+                       "_links": ["self": link(selfHref)]])
+        case ("POST", 0):
+            guard let first = fields["first"] as? String, !first.isEmpty else {
+                return badRequest("first")
+            }
+            let actor = DemoActor(id: nextActorId,
+                                  first: first,
+                                  last: fields["last"] as? String ?? "",
+                                  phone: fields["phone"] as? String,
+                                  email: fields["email"] as? String,
+                                  projectIds: fields["projectIds"] as? [Int] ?? [])
+            nextActorId += 1
+            actors.append(actor)
+            return ok(actorJSON(actor))
+        default:
+            break
+        }
+
+        guard let id = path.first.flatMap(Int.init),
+              let index = actors.firstIndex(where: { $0.id == id }) else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("GET", nil):
+            return ok(actorJSON(actors[index]))
+        case ("PUT", nil):
+            if let value = fields["first"] as? String { actors[index].first = value }
+            if let value = fields["last"] as? String { actors[index].last = value }
+            if let value = fields["phone"] as? String { actors[index].phone = value }
+            if let value = fields["email"] as? String { actors[index].email = value }
+            if let value = fields["projectIds"] as? [Int] { actors[index].projectIds = value }
+            return ok(actorJSON(actors[index]))
+        case ("DELETE", nil):
+            let removed = actors.remove(at: index)
+            // Anyone cast as this actor becomes uncast rather than dangling.
+            for (projectId, list) in people {
+                for (i, person) in list.enumerated() where person.actorId == removed.id {
+                    people[projectId]?[i].actorId = nil
+                }
+            }
+            return ok([:])
+        default:
+            return notFound()
+        }
+    }
+
+    private func actorJSON(_ actor: DemoActor) -> [String: Any] {
+        var json: [String: Any] = [
+            "id": actor.id,
+            "first": actor.first,
+            "last": actor.last,
+            "hasHeadshot": false,
+            "projectIds": actor.projectIds,
+            "_links": [
+                "self": link("/api/actor/\(actor.id)"),
+                "actors": link("/api/actor"),
+                "update": link("/api/actor/\(actor.id)"),
+                "delete": link("/api/actor/\(actor.id)"),
+            ],
+        ]
+        if let phone = actor.phone { json["phone"] = phone }
+        if let email = actor.email { json["email"] = email }
+        return json
+    }
+
     private func routeBlock(method: String, path: [String],
                             query: [String: String],
                             fields: [String: Any]) -> (Int, Data) {
@@ -247,13 +406,59 @@ actor DemoBackend {
         switch (method, path.dropFirst().first) {
         case ("PUT", nil):
             snapshot(projectId)
+            // Absent means "leave alone", never "clear" — the editor's debounced
+            // content auto-save omits every field but `content`, and must not
+            // wipe the speaker, tags or formatting on its way past.
             if let content = fields["content"] as? String {
                 blocks[projectId]?[index].content = content
             }
-            blocks[projectId]?[index].personId = fields["personId"] as? Int
-            blocks[projectId]?[index].tags = fields["tags"] as? String
+            if let personId = fields["personId"] as? Int {
+                blocks[projectId]?[index].personId = personId
+            }
+            if let tags = fields["tags"] as? String {
+                blocks[projectId]?[index].tags = tags
+            }
+            if let align = fields["textAlign"] as? String {
+                guard let canonical = canonicalAlign(align) else {
+                    return badRequest("textAlign")
+                }
+                blocks[projectId]?[index].textAlign = canonical
+            }
+            if let font = fields["font"] as? String {
+                guard let canonical = canonicalFont(font) else {
+                    return badRequest("font")
+                }
+                blocks[projectId]?[index].font = canonical
+            }
+            if let bold = fields["textBold"] as? Bool {
+                blocks[projectId]?[index].textBold = bold
+            }
+            if let italic = fields["textItalic"] as? Bool {
+                blocks[projectId]?[index].textItalic = italic
+            }
+            if let underline = fields["textUnderline"] as? Bool {
+                blocks[projectId]?[index].textUnderline = underline
+            }
             touch(projectId)
             return ok(blockJSON(blocks[projectId]![index], projectId: projectId))
+        case ("POST", "move"):
+            guard let position = fields["position"] as? Int else {
+                return badRequest("position")
+            }
+            snapshot(projectId)
+            var list = (blocks[projectId] ?? []).sorted { $0.order < $1.order }
+            guard let from = list.firstIndex(where: { $0.id == id }) else { return notFound() }
+            // `position` is an absolute 1-based order; clamp so a stale client
+            // index can't throw.
+            let to = min(max(position - 1, 0), list.count - 1)
+            let moved = list.remove(at: from)
+            list.insert(moved, at: to)
+            for i in list.indices { list[i].order = i + 1 }
+            blocks[projectId] = list
+            touch(projectId)
+            let items = list.map { blockJSON($0, projectId: projectId) }
+            return ok(["_embedded": ["blockResourceList": items],
+                       "_links": ["self": link("/api/block?projectId=\(projectId)")]])
         case ("DELETE", nil):
             snapshot(projectId)
             blocks[projectId]?.remove(at: index)
@@ -335,6 +540,9 @@ actor DemoBackend {
             if let fullName = fields["fullName"] as? String {
                 people[projectId]?[index].fullName = fullName
             }
+            // Mirrors the server: an omitted actorId clears the casting, so
+            // every character PUT must state the casting it means to keep.
+            people[projectId]?[index].actorId = fields["actorId"] as? Int
             touch(projectId)
             return ok(personJSON(people[projectId]![index], projectId: projectId))
         case "DELETE":
@@ -639,7 +847,8 @@ actor DemoBackend {
 
     private func rootJSON() -> [String: Any] {
         ["_links": ["self": link("/api"),
-                    "projects": link("/api/project")]]
+                    "projects": link("/api/project"),
+                    "actors": link("/api/actor")]]
     }
 
     private func projectJSON(_ project: DemoProject) -> [String: Any] {
@@ -660,9 +869,14 @@ actor DemoBackend {
                 "undoRedoStatus": link("/api/project/\(project.id)/undo-redo-status"),
                 "syncStatus": link("/api/project/\(project.id)/sync-status"),
                 "export": link("/api/project/\(project.id)/export/fountain"),
+                "actors": link("/api/actor?projectId=\(project.id)"),
+                "importScript": link("/api/project/\(project.id)/import-script"),
             ],
         ]
         if let writers = project.writers { json["writers"] = writers }
+        if let value = project.screenplayTitle { json["screenplayTitle"] = value }
+        if let value = project.contactInfo { json["contactInfo"] = value }
+        if let value = project.screenplayVersion { json["screenplayVersion"] = value }
         return json
     }
 
@@ -694,11 +908,16 @@ actor DemoBackend {
             }
         }
         if let tags = block.tags { json["tags"] = tags }
+        if let value = block.textAlign { json["textAlign"] = value }
+        if let value = block.font { json["font"] = value }
+        if let value = block.textBold { json["textBold"] = value }
+        if let value = block.textItalic { json["textItalic"] = value }
+        if let value = block.textUnderline { json["textUnderline"] = value }
         return json
     }
 
     private func personJSON(_ person: DemoPerson, projectId: Int) -> [String: Any] {
-        [
+        var json: [String: Any] = [
             "id": person.id,
             "name": person.name,
             "fullName": person.fullName,
@@ -709,6 +928,15 @@ actor DemoBackend {
                 "delete": link("/api/person/\(person.id)"),
             ],
         ]
+        if let actorId = person.actorId {
+            json["actorId"] = actorId
+            if let actor = actors.first(where: { $0.id == actorId }) {
+                json["actorName"] = [actor.first, actor.last]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+        }
+        return json
     }
 
     // MARK: - Export
@@ -735,6 +963,27 @@ actor DemoBackend {
     // MARK: - Helpers
 
     private let iso = ISO8601DateFormatter()
+
+    /// The real server accepts either the display spelling or its own canonical
+    /// form and always reads back the canonical one. The demo mirrors that, so
+    /// a client that round-trips a value here behaves the same in production.
+    private func canonicalAlign(_ value: String) -> String? {
+        switch value.uppercased() {
+        case "LEFT": return "LEFT"
+        case "CENTER": return "CENTER"
+        case "RIGHT": return "RIGHT"
+        default: return nil
+        }
+    }
+
+    private func canonicalFont(_ value: String) -> String? {
+        switch value.uppercased().replacingOccurrences(of: " ", with: "_") {
+        case "COURIER_PRIME": return "COURIER_PRIME"
+        case "ARIAL": return "ARIAL"
+        case "TIMES_NEW_ROMAN": return "TIMES_NEW_ROMAN"
+        default: return nil
+        }
+    }
 
     private func locateBlock(_ id: Int) -> (projectId: Int, index: Int)? {
         for (projectId, list) in blocks {
@@ -782,8 +1031,19 @@ actor DemoBackend {
     // MARK: - Sample content
 
     private func seed() {
-        let maya = addPerson(name: "MAYA", fullName: "Maya Okafor")
+        var maya = addPerson(name: "MAYA", fullName: "Maya Okafor")
         let dev = addPerson(name: "DEV", fullName: "Dev Ramaswamy")
+
+        // One character arrives already cast and one still open, so the casting
+        // screen shows both states without the user having to set them up.
+        let rosa = addActor(first: "Rosa", last: "Delgado",
+                            email: "rosa@example.com", phone: "555-0142",
+                            projectIds: [1])
+        addActor(first: "Theo", last: "Nakamura",
+                 email: "theo@example.com", phone: nil, projectIds: [1])
+        addActor(first: "Priya", last: "Anand",
+                 email: "priya@example.com", phone: nil, projectIds: [2])
+        maya.actorId = rosa.id
 
         let lastTake = addProject(title: "The Last Take",
                                   writers: "Demo Screenwriter",
@@ -885,6 +1145,16 @@ actor DemoBackend {
         let person = DemoPerson(id: nextPersonId, name: name, fullName: fullName)
         nextPersonId += 1
         return person
+    }
+
+    @discardableResult
+    private func addActor(first: String, last: String, email: String?,
+                          phone: String?, projectIds: [Int]) -> DemoActor {
+        let actor = DemoActor(id: nextActorId, first: first, last: last,
+                              phone: phone, email: email, projectIds: projectIds)
+        nextActorId += 1
+        actors.append(actor)
+        return actor
     }
 
     private func seedBlocks(project: DemoProject,

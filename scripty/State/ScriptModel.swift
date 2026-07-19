@@ -15,6 +15,14 @@ final class ScriptModel {
     let app: AppModel
     private(set) var project: Project
 
+    /// Adopt a project resource the server just returned — a title-page save
+    /// or a script import answers with the refreshed project, and the header
+    /// would otherwise keep showing the old title.
+    func adopt(_ updated: Project) {
+        guard updated.id == project.id else { return }
+        project = updated
+    }
+
     private(set) var blocks: [Block] = []
     private(set) var blocksLinks = HALLinks()
     private(set) var characters: [Person] = []
@@ -164,7 +172,8 @@ final class ScriptModel {
         }
     }
 
-    private func replace(_ updated: Block) {
+    /// Internal (not private) so `ScriptModel+Formatting` can reuse it.
+    func replace(_ updated: Block) {
         if let index = blocks.firstIndex(where: { $0.id == updated.id }) {
             blocks[index] = updated
         }
@@ -441,7 +450,8 @@ final class ScriptModel {
         }
     }
 
-    private func report(_ error: Error) {
+    /// Internal (not private) so `ScriptModel+Formatting` can reuse it.
+    func report(_ error: Error) {
         app.handle(error)
         errorMessage = error.localizedDescription
     }

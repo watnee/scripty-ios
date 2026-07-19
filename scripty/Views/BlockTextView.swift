@@ -43,7 +43,6 @@ struct BlockTextView: UIViewRepresentable {
 
     func updateUIView(_ view: BlockUITextView, context: Context) {
         context.coordinator.block = block
-        apply(font: font, alignment: alignment, capitalize: autocapitalize, to: view)
 
         // While the writer is mid-keystroke the model mirrors the view via
         // `liveText`, so leave the view alone. Once liveText is cleared the
@@ -54,6 +53,11 @@ struct BlockTextView: UIViewRepresentable {
         if model.liveText[block.id] == nil, view.text != desired {
             view.text = desired
         }
+
+        // After the text sync, never before: assigning `.text` rebuilds the
+        // storage from the view's plain font/colour, dropping the underline
+        // attribute, so styling has to be re-stamped on top of the new string.
+        apply(font: font, alignment: alignment, capitalize: autocapitalize, to: view)
 
         if model.focusedBlockId == block.id, !view.isFirstResponder {
             // A row just inserted into the LazyVStack isn't in the window during
@@ -76,6 +80,50 @@ struct BlockTextView: UIViewRepresentable {
         if view.font != font { view.font = font }
         if view.textAlignment != alignment { view.textAlignment = alignment }
         if view.autocapitalizationType != capitalize { view.autocapitalizationType = capitalize }
+        applyUnderline(block.textUnderline ?? false, font: font, to: view)
+    }
+
+    /// Underline is the one style `UIFont` cannot carry, so it is applied as a
+    /// text attribute instead.
+    ///
+    /// Deliberately an *attribute-only* edit: the view's `text` is never
+    /// reassigned and `attributedText` is never used, so the backing string —
+    /// and therefore every UTF-16 offset the caret math and the Return /
+    /// Backspace interception depend on — is bit-for-bit unchanged. Attribute
+    /// edits don't route through `shouldChangeTextIn` or `textViewDidChange`
+    /// either, so no phantom keystroke reaches the model.
+    private func applyUnderline(_ underlined: Bool, font: UIFont, to view: BlockUITextView) {
+        let style = underlined ? NSUnderlineStyle.single.rawValue : 0
+
+        // Governs text typed from the caret onward.
+        var typing = view.typingAttributes
+        let typingStyle = typing[.underlineStyle] as? Int ?? 0
+        if typingStyle != style || typing[.font] as? UIFont != font {
+            typing[.font] = font
+            if underlined {
+                typing[.underlineStyle] = style
+            } else {
+                typing.removeValue(forKey: .underlineStyle)
+            }
+            view.typingAttributes = typing
+        }
+
+        // Governs text already on screen.
+        let storage = view.textStorage
+        guard storage.length > 0 else { return }
+        let existing = storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int ?? 0
+        guard existing != style else { return }
+
+        let range = NSRange(location: 0, length: storage.length)
+        let selection = view.selectedRange
+        storage.beginEditing()
+        if underlined {
+            storage.addAttribute(.underlineStyle, value: style, range: range)
+        } else {
+            storage.removeAttribute(.underlineStyle, range: range)
+        }
+        storage.endEditing()
+        if view.selectedRange != selection { view.selectedRange = selection }
     }
 
     @MainActor

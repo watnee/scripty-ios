@@ -52,4 +52,5 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let insert = Rel("insert")
     static let shareEmail = Rel("shareEmail")
     static let importDocument = Rel("importDocument")
+    static let importScript = Rel("importScript")
 }
