@@ -143,10 +143,13 @@ struct PageSetup: Codable, Equatable {
     var padBottomFraction: Double { margins.bottomIn / paper.widthIn }
     var padLeftFraction: Double { margins.leftIn / paper.widthIn }
 
-    /// Query items the server's PDF export understands, so an exported page
-    /// matches what the writer was just looking at.
-    var exportQueryItems: [URLQueryItem] {
-        [URLQueryItem(name: "paper", value: paper.rawValue),
-         URLQueryItem(name: "margins", value: margins.rawValue)]
+    /// Query parameters the server's PDF export understands, so an exported
+    /// page matches what the writer was just looking at.
+    ///
+    /// Shaped for `HALLink.addingQuery` rather than as `[URLQueryItem]`: the
+    /// client never builds an export URL itself, it decorates the link the
+    /// server advertised.
+    var exportQuery: [String: String] {
+        ["paper": paper.rawValue, "margins": margins.rawValue]
     }
 }

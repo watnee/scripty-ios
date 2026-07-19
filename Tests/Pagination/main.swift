@@ -196,6 +196,42 @@ check("and it opens the page with no leading blank",
 check("a script of nothing but annotations has no pages",
       ScriptPagination.paginate(blocks: Array(annotated.prefix(3))).count, 0)
 
+// MARK: - Export query
+//
+// A paged export has to carry the writer's own paper and margins, or the PDF
+// comes back paginated to the server's defaults and stops matching the page
+// view it was exported from. The client never builds the URL itself, so what
+// is pinned here is that the setup survives being folded into the advertised
+// link — including the case where the link already carries query parameters.
+
+print("")
+print("Export query")
+
+var exported = PageSetup.default
+exported.paper = .a4
+exported.margins = .narrow
+
+check("paper and margins are both carried", exported.exportQuery.count, 2)
+check("paper is named as the server spells it", exported.exportQuery["paper"] ?? "", "a4")
+check("margins likewise", exported.exportQuery["margins"] ?? "", "narrow")
+
+let bare = HALLink(href: "https://example.test/api/project/7/export/pdf")
+check("the setup is appended to a bare link",
+      bare.addingQuery(exported.exportQuery).href,
+      "https://example.test/api/project/7/export/pdf?margins=narrow&paper=a4")
+
+// The server advertises the edition on the export link, so decorating it must
+// add to that query rather than replace it — otherwise exporting from inside
+// an edition would silently export the default one.
+let editioned = HALLink(href: "https://example.test/api/project/7/export/pdf?editionId=3")
+check("an existing parameter is kept",
+      editioned.addingQuery(exported.exportQuery).href,
+      "https://example.test/api/project/7/export/pdf?editionId=3&margins=narrow&paper=a4")
+
+check("re-exporting replaces rather than repeats",
+      editioned.addingQuery(exported.exportQuery).addingQuery(PageSetup.default.exportQuery).href,
+      "https://example.test/api/project/7/export/pdf?editionId=3&margins=standard&paper=letter")
+
 print("")
 if failures == 0 {
     print("Pagination checks passed.")

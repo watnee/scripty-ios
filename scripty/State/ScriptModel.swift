@@ -671,6 +671,11 @@ final class ScriptModel {
         let link: HALLink
 
         var id: String { rel.rawValue }
+
+        /// Whether the format has pages at all. Fountain and Final Draft are
+        /// unpaginated text — paper size and margins mean nothing to them, so
+        /// they take the link exactly as advertised.
+        var isPaged: Bool { rel == .exportPdf }
     }
 
     var exportOptions: [ExportOption] {
@@ -686,8 +691,16 @@ final class ScriptModel {
     }
 
     /// Downloads an export with auth and writes it to a shareable temp file.
+    ///
+    /// A paged export carries the writer's own page setup, so the PDF matches
+    /// the sheets they were just looking at in page view rather than falling
+    /// back to the server's defaults. Page setup is a device preference, so it
+    /// is read from the shared presentation settings at the moment of export.
     func export(_ option: ExportOption) async throws -> URL {
-        let data = try await app.client.data(for: option.link)
+        let link = option.isPaged
+            ? option.link.addingQuery(PresentationSettings.shared.pageSetup.exportQuery)
+            : option.link
+        let data = try await app.client.data(for: link)
         let safeTitle = project.displayTitle
             .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
             .joined()
