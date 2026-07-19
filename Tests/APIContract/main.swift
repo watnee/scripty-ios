@@ -610,6 +610,67 @@ func run() async {
     check("the feed honours a limit",
           embedded(json(await be.respond(method: "GET", url: url("/api/project/\(pid)/activity?limit=2"), body: nil).data)).count == 2)
 
+    // --- INVITATIONS ---
+    //
+    // The client manages who was invited; it never accepts an invitation or
+    // reads a screenplay by token, and it is never handed a token or an invite
+    // URL to hold. These pin that, and pin the enumeration defence — inviting
+    // an address that is already known must be indistinguishable from inviting
+    // one that is not.
+    func inviteList() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/project/\(pid)/invitations"), body: nil).data))
+    }
+
+    let inviteRoot = json(await be.respond(method: "GET", url: url("/api/project/\(pid)/invitations"), body: nil).data)
+    check("the collection offers `sendInvitation`",
+          (inviteRoot["_links"] as? [String: Any])?["sendInvitation"] != nil)
+
+    var invites = embedded(inviteRoot)
+    check("seeded invitations are present", invites.count >= 2, "got \(invites.count)")
+    check("collaborators and readers are distinguishable",
+          invites.contains { $0["viewOnly"] as? Bool == true }
+              && invites.contains { $0["viewOnly"] as? Bool == false })
+    check("no invitation carries a token or a link to share",
+          invites.allSatisfy { $0["token"] == nil && $0["inviteUrl"] == nil && $0["url"] == nil })
+
+    let inviteCountBefore = invites.count
+    let invited = await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
+                                   body: body(["email": "newcomer@example.com", "viewOnly": false]))
+    check("send invitation -> 200", invited.status == 200, "got \(invited.status)")
+    invites = embedded(json(invited.data))
+    check("the invitation was recorded", invites.count == inviteCountBefore + 1,
+          "\(inviteCountBefore) -> \(invites.count)")
+
+    // Inviting a known address answers identically — same status, same shape —
+    // so nothing reveals whether that address was already there.
+    let repeatInvite = await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
+                                        body: body(["email": "newcomer@example.com", "viewOnly": false]))
+    check("re-inviting a known address -> 200, not a conflict",
+          repeatInvite.status == 200, "got \(repeatInvite.status)")
+    check("re-inviting does not duplicate the invitation",
+          embedded(json(repeatInvite.data)).count == invites.count)
+    check("an empty address -> 400",
+          await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
+                           body: body(["email": "  "])).status == 400)
+
+    // Inviting is an action, so it writes to the log.
+    check("inviting writes an activity entry",
+          embedded(json(await be.respond(method: "GET", url: url("/api/project/\(pid)/activity"), body: nil).data))
+              .contains { ($0["actionType"] as? String) == "INVITATION_SEND" })
+
+    let revokeTarget = invites.first { ($0["email"] as? String) == "newcomer@example.com" }
+    let revokeId = revokeTarget?["id"] as? Int ?? 0
+    check("an invitation advertises `revoke`",
+          (revokeTarget?["_links"] as? [String: Any])?["revoke"] != nil)
+    let revoked = await be.respond(method: "DELETE",
+                                   url: url("/api/project/\(pid)/invitations/\(revokeId)"), body: nil)
+    check("revoke -> 200", revoked.status == 200, "got \(revoked.status)")
+    check("the invitation is gone",
+          !embedded(json(revoked.data)).contains { $0["id"] as? Int == revokeId })
+    check("revoking an unknown invitation -> 404",
+          await be.respond(method: "DELETE", url: url("/api/project/\(pid)/invitations/999999"),
+                           body: nil).status == 404)
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

@@ -76,6 +76,9 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let comments = Rel("comments")
     static let addComment = Rel("addComment")
     static let activity = Rel("activity")
+    static let invitations = Rel("invitations")
+    static let sendInvitation = Rel("sendInvitation")
+    static let revoke = Rel("revoke")
 
     // Named variants of a script.
     static let editions = Rel("editions")

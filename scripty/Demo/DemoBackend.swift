@@ -83,6 +83,8 @@ actor DemoBackend {
     private var nextVersionId = 1
     private var comments: [DemoComment] = []
     private var nextCommentId = 1
+    private var invitations: [DemoInvitation] = []
+    private var nextInvitationId = 1
     private var activity: [DemoActivity] = []
     private var nextActivityId = 1
     private var editions: [DemoEdition] = []
@@ -212,6 +214,9 @@ actor DemoBackend {
             return applyHistory(projectId: id, undoing: true)
         case ("POST", "redo"):
             return applyHistory(projectId: id, undoing: false)
+        case (_, "invitations"):
+            return routeInvitations(method: method, projectId: id,
+                                    path: Array(path.dropFirst(2)), fields: fields)
         case ("GET", "activity"):
             let limit = query["limit"].flatMap(Int.init) ?? 30
             return activityCollection(id, limit: min(max(limit, 1), 100))
@@ -859,6 +864,91 @@ actor DemoBackend {
     // MARK: - Undo / redo
 
     /// History is snapshot-based: good enough for a demo, invisible to the UI.
+    // MARK: - Invitations
+
+    /// Someone invited to a screenplay. The demo enables this surface where a
+    /// real deployment keeps it behind a flag, because nothing here leaves the
+    /// process: no mail is sent and no account can be created.
+    private struct DemoInvitation {
+        var id: Int
+        var projectId: Int
+        var email: String
+        var viewOnly: Bool
+        var status: String
+    }
+
+    private func routeInvitations(method: String, projectId: Int, path: [String],
+                                  fields: [String: Any]) -> (Int, Data) {
+        guard projects.contains(where: { $0.id == projectId }) else { return notFound() }
+
+        switch (method, path.count) {
+        case ("GET", 0):
+            return invitationCollection(projectId)
+
+        case ("POST", 0):
+            guard let email = (fields["email"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
+                return badRequest("email")
+            }
+            // Answers the same whether or not the address is already known, so
+            // the client cannot learn who has an account. The real service
+            // returns null in that case for the same reason.
+            let known = invitations.contains {
+                $0.projectId == projectId && $0.email.caseInsensitiveCompare(email) == .orderedSame
+            }
+            if !known {
+                invitations.append(DemoInvitation(
+                    id: nextInvitationId,
+                    projectId: projectId,
+                    email: email,
+                    viewOnly: fields["viewOnly"] as? Bool ?? false,
+                    status: "Pending"))
+                nextInvitationId += 1
+            }
+            recordActivity(projectId, type: "INVITATION_SEND",
+                           summary: "Invited \(email)")
+            return invitationCollection(projectId)
+
+        default:
+            break
+        }
+
+        guard let id = path.first.flatMap(Int.init),
+              let index = invitations.firstIndex(where: {
+                  $0.id == id && $0.projectId == projectId
+              }), method == "DELETE" else { return notFound() }
+
+        let removed = invitations.remove(at: index)
+        recordActivity(projectId, type: "INVITATION_REVOKE",
+                       summary: "Revoked the invitation for \(removed.email)")
+        return invitationCollection(projectId)
+    }
+
+    private func invitationCollection(_ projectId: Int) -> (Int, Data) {
+        let items = invitations
+            .filter { $0.projectId == projectId }
+            .map { invitation -> [String: Any] in
+                [
+                    "id": invitation.id,
+                    "email": invitation.email,
+                    "statusLabel": invitation.status,
+                    "viewOnly": invitation.viewOnly,
+                    "_links": [
+                        "revoke": link("/api/project/\(projectId)/invitations/\(invitation.id)"),
+                        "invitations": link("/api/project/\(projectId)/invitations"),
+                    ],
+                ]
+            }
+        return ok([
+            "_embedded": ["invitationResourceList": items],
+            "_links": [
+                "self": link("/api/project/\(projectId)/invitations"),
+                "sendInvitation": link("/api/project/\(projectId)/invitations"),
+                "project": link("/api/project/\(projectId)"),
+            ],
+        ])
+    }
+
     // MARK: - Activity
 
     /// One entry in a project's activity log. Written by the demo's own
@@ -1472,6 +1562,7 @@ actor DemoBackend {
                 "versions": link("/api/project/version?projectId=\(project.id)"),
                 "editions": link("/api/project/edition?projectId=\(project.id)"),
                 "activity": link("/api/project/\(project.id)/activity"),
+                "invitations": link("/api/project/\(project.id)/invitations"),
             ],
         ]
         if let writers = project.writers { json["writers"] = writers }
@@ -1947,6 +2038,17 @@ actor DemoBackend {
                         body: "Agreed — trimming after the table read.",
                         minutesAgo: 55, mine: true)
         }
+
+        // One of each kind of access, so the share screen shows the distinction
+        // between a collaborator and a reader rather than describing it.
+        invitations.append(DemoInvitation(id: nextInvitationId, projectId: lastTake.id,
+                                          email: "rosa@example.com", viewOnly: false,
+                                          status: "Pending"))
+        nextInvitationId += 1
+        invitations.append(DemoInvitation(id: nextInvitationId, projectId: lastTake.id,
+                                          email: "financier@example.com", viewOnly: true,
+                                          status: "Active"))
+        nextInvitationId += 1
     }
 
     private func seedComment(_ blockId: Int, author: String, body: String,

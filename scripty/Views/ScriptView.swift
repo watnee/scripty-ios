@@ -27,6 +27,8 @@ struct ScriptView: View {
     /// The element whose comment thread is open, if any.
     @State private var commentTarget: Block?
     @State private var activityLink: HALLink?
+    /// Only present when the server has invitations over the API turned on.
+    @State private var shareLink: HALLink?
     @State private var editions: EditionsModel
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
@@ -98,6 +100,10 @@ struct ScriptView: View {
         }
         .sheet(item: $activityLink) { link in
             ActivityView(app: model.app, source: link)
+        }
+        .sheet(item: $shareLink) { link in
+            ShareView(app: model.app, source: link,
+                      projectTitle: model.project.displayTitle)
         }
         .sheet(item: $commentTarget) { block in
             // Presented from the link the block advertised, so the thread
@@ -403,6 +409,14 @@ struct ScriptView: View {
                         showingVersions = true
                     } label: {
                         Label("Version History", systemImage: "clock.arrow.circlepath")
+                    }
+                }
+
+                if let share = model.project.link(.invitations) {
+                    Button {
+                        shareLink = share
+                    } label: {
+                        Label("Share", systemImage: "person.badge.plus")
                     }
                 }
 
