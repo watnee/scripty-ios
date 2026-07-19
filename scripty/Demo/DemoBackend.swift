@@ -38,6 +38,7 @@ actor DemoBackend {
         var tags: String?
         var textAlign: String?
         var font: String?
+        var highlight: String?
         var textBold: Bool?
         var textItalic: Bool?
         var textUnderline: Bool?
@@ -361,15 +362,7 @@ actor DemoBackend {
             guard let projectId = query["projectId"].flatMap(Int.init) else {
                 return badRequest("projectId")
             }
-            let items = (blocks[projectId] ?? [])
-                .sorted { $0.order < $1.order }
-                .map { blockJSON($0, projectId: projectId) }
-            var links: [String: Any] = ["self": link("/api/block?projectId=\(projectId)")]
-            // An untouched script advertises only the seed affordance.
-            if items.isEmpty, blocks[projectId] != nil {
-                links["createInitial"] = link("/api/block/initial?projectId=\(projectId)")
-            }
-            return ok(["_embedded": ["blockResourceList": items], "_links": links])
+            return blockCollection(projectId)
         case ("POST", 1) where path.first == "initial":
             guard let projectId = query["projectId"].flatMap(Int.init),
                   blocks[projectId] != nil else { return badRequest("projectId") }
@@ -396,6 +389,8 @@ actor DemoBackend {
             blocks[projectId]?.append(block)
             touch(projectId)
             return ok(blockJSON(block, projectId: projectId))
+        case ("POST", 2) where path.first == "bulk":
+            return routeBulkBlocks(operation: path[1], fields: fields)
         default:
             break
         }
@@ -880,6 +875,165 @@ actor DemoBackend {
         return json
     }
 
+    /// The block collection, with the affordances the real server advertises:
+    /// only an untouched script offers `createInitial`, and only a script with
+    /// something in it offers the bulk operations.
+    private func blockCollection(_ projectId: Int) -> (Int, Data) {
+        let items = (blocks[projectId] ?? [])
+            .sorted { $0.order < $1.order }
+            .map { blockJSON($0, projectId: projectId) }
+        var links: [String: Any] = ["self": link("/api/block?projectId=\(projectId)")]
+        if items.isEmpty, blocks[projectId] != nil {
+            links["createInitial"] = link("/api/block/initial?projectId=\(projectId)")
+        }
+        if !items.isEmpty {
+            links["bulkSetType"] = link("/api/block/bulk/type")
+            links["bulkAddTags"] = link("/api/block/bulk/tags")
+            links["bulkFormat"] = link("/api/block/bulk/format")
+            links["bulkDelete"] = link("/api/block/bulk/delete")
+            links["bulkReplace"] = link("/api/block/bulk/replace")
+        }
+        return ok(["_embedded": ["blockResourceList": items], "_links": links])
+    }
+
+    /// Handles the five bulk operations. Each mutates a set of blocks under a
+    /// single snapshot — one undo step for the batch, as on the server — and
+    /// answers with the refreshed collection.
+    private func routeBulkBlocks(operation: String, fields: [String: Any]) -> (Int, Data) {
+        guard let ids = fields["ids"] as? [Int], !ids.isEmpty else {
+            return badRequest("ids")
+        }
+        guard let projectId = fields["projectId"] as? Int, blocks[projectId] != nil else {
+            return badRequest("projectId")
+        }
+        // A caller may not reach outside the project it named.
+        let owned = Set((blocks[projectId] ?? []).map(\.id))
+        guard ids.allSatisfy(owned.contains) else { return (403, Data("{}".utf8)) }
+
+        snapshot(projectId)
+        let targets = Set(ids)
+
+        switch operation {
+        case "type":
+            guard let type = fields["type"] as? String, !type.isEmpty else {
+                return badRequest("type")
+            }
+            mutate(projectId, where: targets) { $0.type = type }
+
+        case "tags":
+            guard let tags = fields["tags"] as? String, !tags.isEmpty else {
+                return badRequest("tags")
+            }
+            let incoming = tags.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            mutate(projectId, where: targets) { block in
+                var existing = (block.tags ?? "").split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                // Additive and case-insensitive, and the stored casing wins.
+                for tag in incoming
+                where !existing.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+                    existing.append(tag)
+                }
+                block.tags = existing.isEmpty ? nil : existing.joined(separator: ", ")
+            }
+
+        case "delete":
+            blocks[projectId]?.removeAll { targets.contains($0.id) }
+            var list = (blocks[projectId] ?? []).sorted { $0.order < $1.order }
+            for i in list.indices { list[i].order = i + 1 }
+            blocks[projectId] = list
+
+        case "format":
+            if let align = fields["align"] as? String {
+                guard let canonical = canonicalAlign(align) else { return badRequest("align") }
+                mutate(projectId, where: targets) { $0.textAlign = canonical }
+            }
+            if let font = fields["font"] as? String {
+                guard let canonical = canonicalFont(font) else { return badRequest("font") }
+                mutate(projectId, where: targets) { $0.font = canonical }
+            }
+            if let style = fields["style"] as? String {
+                switch style.uppercased() {
+                case "BOLD":
+                    mutate(projectId, where: targets) { $0.textBold = !($0.textBold ?? false) }
+                case "ITALIC":
+                    mutate(projectId, where: targets) { $0.textItalic = !($0.textItalic ?? false) }
+                case "UNDERLINE":
+                    mutate(projectId, where: targets) { $0.textUnderline = !($0.textUnderline ?? false) }
+                default:
+                    return badRequest("style")
+                }
+            }
+            if fields["clearHighlight"] as? Bool == true {
+                mutate(projectId, where: targets) { $0.highlight = nil }
+            } else if let highlight = fields["highlight"] as? String {
+                // An unrecognised tint clears rather than failing, as on the server.
+                let known = ["YELLOW", "GREEN", "BLUE", "RED", "GRAY"]
+                let key = highlight.trimmingCharacters(in: .whitespaces).uppercased()
+                mutate(projectId, where: targets) { $0.highlight = known.contains(key) ? key : nil }
+            }
+
+        case "replace":
+            guard let find = fields["find"] as? String, !find.isEmpty else {
+                return badRequest("find")
+            }
+            let replacement = fields["replace"] as? String ?? ""
+            let matchCase = fields["matchCase"] as? Bool ?? false
+            let wholeWord = fields["wholeWord"] as? Bool ?? false
+            let includeCues = fields["includeCharacterCues"] as? Bool ?? false
+            mutate(projectId, where: targets) { block in
+                // Cue content mirrors the person record, so it is left alone
+                // unless the caller opted in.
+                if !includeCues, block.type == "CHARACTER" || block.type == "DUAL_DIALOGUE" {
+                    return
+                }
+                block.content = Self.literalReplace(
+                    in: block.content, find: find, with: replacement,
+                    matchCase: matchCase, wholeWord: wholeWord)
+            }
+
+        default:
+            return notFound()
+        }
+
+        touch(projectId)
+        return blockCollection(projectId)
+    }
+
+    private func mutate(_ projectId: Int,
+                        where ids: Set<Int>,
+                        _ change: (inout DemoBlock) -> Void) {
+        guard var list = blocks[projectId] else { return }
+        for index in list.indices where ids.contains(list[index].id) {
+            change(&list[index])
+        }
+        blocks[projectId] = list
+    }
+
+    /// Literal find-and-replace — `find` is never treated as a pattern and the
+    /// replacement is inserted verbatim, matching the server's use of
+    /// `Pattern.quote` and `Matcher.quoteReplacement`.
+    private static func literalReplace(in text: String,
+                                       find: String,
+                                       with replacement: String,
+                                       matchCase: Bool,
+                                       wholeWord: Bool) -> String {
+        guard !find.isEmpty else { return text }
+        var pattern = NSRegularExpression.escapedPattern(for: find)
+        if wholeWord { pattern = "\\b\(pattern)\\b" }
+        let options: NSRegularExpression.Options = matchCase ? [] : [.caseInsensitive]
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return text
+        }
+        let template = NSRegularExpression.escapedTemplate(for: replacement)
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: template)
+    }
+
     private func blockJSON(_ block: DemoBlock, projectId: Int) -> [String: Any] {
         var json: [String: Any] = [
             "id": block.id,
@@ -910,6 +1064,7 @@ actor DemoBackend {
         if let tags = block.tags { json["tags"] = tags }
         if let value = block.textAlign { json["textAlign"] = value }
         if let value = block.font { json["font"] = value }
+        if let value = block.highlight { json["highlight"] = value }
         if let value = block.textBold { json["textBold"] = value }
         if let value = block.textItalic { json["textItalic"] = value }
         if let value = block.textUnderline { json["textUnderline"] = value }

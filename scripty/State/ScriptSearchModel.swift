@@ -43,6 +43,17 @@ final class ScriptSearchModel {
     /// What the writer typed. Call `refresh(in:)` after changing it.
     var query = ""
 
+    // MARK: - Replace
+
+    /// The replace row is hidden until asked for — finding is the common case.
+    var isReplacing = false
+    var replacement = ""
+    var matchCase = false
+    var wholeWord = false
+    /// Character cues mirror their person record, so rewriting one would
+    /// desync the two. Off by default, exactly as on the web.
+    var includeCharacterCues = false
+
     private(set) var matches: [Match] = []
     /// Index into `matches`; meaningless while `matches` is empty.
     private(set) var currentIndex = 0
@@ -119,6 +130,45 @@ final class ScriptSearchModel {
         guard let index = matches.firstIndex(where: { $0.blockId == match.blockId }) else { return nil }
         currentIndex = index
         return current
+    }
+
+    // MARK: - Replace targets
+
+    /// The blocks a replace would actually touch.
+    ///
+    /// Deliberately narrower than `matches`: find also hits character names and
+    /// tags, but replace only ever rewrites element *content*, and it honours
+    /// the case and whole-word switches that find ignores. Sending the wider
+    /// set would ask the server to edit blocks the writer never saw highlighted.
+    func replaceTargetIds(in blocks: [Block]) -> [Int] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return [] }
+        return blocks.compactMap { block in
+            if !includeCharacterCues && block.blockType.isCharacterCue { return nil }
+            let content = block.content ?? ""
+            return Self.containsMatch(content, needle: needle,
+                                      matchCase: matchCase, wholeWord: wholeWord)
+                ? block.id : nil
+        }
+    }
+
+    /// Literal containment under the same rules the server applies: `find` is
+    /// never a pattern, and whole-word means a word boundary either side.
+    static func containsMatch(_ text: String,
+                              needle: String,
+                              matchCase: Bool,
+                              wholeWord: Bool) -> Bool {
+        guard !needle.isEmpty else { return false }
+        guard wholeWord else {
+            return text.range(of: needle,
+                              options: matchCase ? [.literal] : [.literal, .caseInsensitive]) != nil
+        }
+        let pattern = "\\b\(NSRegularExpression.escapedPattern(for: needle))\\b"
+        let options: NSRegularExpression.Options = matchCase ? [] : [.caseInsensitive]
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return false
+        }
+        return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
     // MARK: - Matching

@@ -144,6 +144,111 @@ func run() async {
     let emptyImp = await be.respond(method: "POST", url: url("/api/project/\(pid)/import-script"), body: Data())
     check("unreadable import -> 400 not 500", emptyImp.status == 400, "got \(emptyImp.status)")
 
+    // --- BULK OPERATIONS ---
+    //
+    // These act on a set of blocks, so they hang off the collection rather than
+    // any one block. The client only shows the selection UI when it sees these
+    // rels, which is why their names are pinned here alongside their behaviour.
+    func blockList() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data))
+    }
+    func collectionLinks() async -> [String: Any] {
+        let payload = json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data)
+        return payload["_links"] as? [String: Any] ?? [:]
+    }
+
+    let bulkLinks = await collectionLinks()
+    for rel in ["bulkSetType", "bulkAddTags", "bulkFormat", "bulkDelete", "bulkReplace"] {
+        check("collection advertises `\(rel)`", bulkLinks[rel] != nil)
+    }
+
+    var current = await blockList()
+    let firstTwo = current.prefix(2).compactMap { $0["id"] as? Int }
+
+    // Retype, and note the response is the whole refreshed collection — the
+    // client adopts it wholesale rather than re-fetching.
+    let retyped = await be.respond(method: "POST", url: url("/api/block/bulk/type"),
+                                   body: body(["ids": firstTwo, "projectId": pid, "type": "ACTION"]))
+    check("bulk retype -> 200", retyped.status == 200, "got \(retyped.status)")
+    check("bulk retype answers with the collection",
+          (json(retyped.data)["_embedded"] as? [String: Any]) != nil)
+    current = await blockList()
+    check("bulk retype applied to both",
+          current.prefix(2).allSatisfy { $0["type"] as? String == "ACTION" })
+
+    // Tagging is additive and case-insensitive: the existing casing wins and
+    // nothing is duplicated.
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/tags"),
+                         body: body(["ids": firstTwo, "projectId": pid, "tags": "Reshoot"]))
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/tags"),
+                         body: body(["ids": firstTwo, "projectId": pid, "tags": "reshoot, Night"]))
+    current = await blockList()
+    let tags = (current.first?["tags"] as? String) ?? ""
+    check("tags are additive", tags.contains("Reshoot") && tags.contains("Night"), "got \(tags)")
+    check("an existing tag is not duplicated",
+          tags.components(separatedBy: "Reshoot").count - 1 == 1, "got \(tags)")
+
+    // Formatting: several fields in one call, and style is a per-block toggle.
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                         body: body(["ids": firstTwo, "projectId": pid,
+                                     "align": "center", "highlight": "yellow", "style": "BOLD"]))
+    current = await blockList()
+    check("bulk align applied", current.first?["textAlign"] as? String == "CENTER",
+          "got \(current.first?["textAlign"] ?? "nil")")
+    check("bulk highlight applied", current.first?["highlight"] as? String == "YELLOW",
+          "got \(current.first?["highlight"] ?? "nil")")
+    check("bulk style toggled on", current.first?["textBold"] as? Bool == true)
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                         body: body(["ids": firstTwo, "projectId": pid, "style": "BOLD"]))
+    current = await blockList()
+    check("style is a toggle, not a set", current.first?["textBold"] as? Bool == false)
+
+    // An unknown tint clears rather than failing, matching the server.
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                         body: body(["ids": firstTwo, "projectId": pid, "highlight": "chartreuse"]))
+    current = await blockList()
+    check("an unknown highlight clears", current.first?["highlight"] == nil)
+
+    // Clearing needs its own flag, since an omitted field means "leave alone".
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                         body: body(["ids": firstTwo, "projectId": pid, "highlight": "blue"]))
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                         body: body(["ids": firstTwo, "projectId": pid, "clearHighlight": true]))
+    current = await blockList()
+    check("clearHighlight removes the tint", current.first?["highlight"] == nil)
+
+    // Replace is literal, and leaves character cues alone unless asked.
+    let cueBefore = current.first { ($0["type"] as? String) == "CHARACTER" }?["content"] as? String
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/replace"),
+                         body: body(["ids": current.compactMap { $0["id"] as? Int },
+                                     "projectId": pid, "find": "the", "replace": "THE"]))
+    current = await blockList()
+    if let cueBefore {
+        let cueAfter = current.first { ($0["type"] as? String) == "CHARACTER" }?["content"] as? String
+        check("replace skips character cues by default", cueAfter == cueBefore,
+              "\(cueBefore) -> \(cueAfter ?? "nil")")
+    }
+
+    check("replace without a find term -> 400",
+          await be.respond(method: "POST", url: url("/api/block/bulk/replace"),
+                           body: body(["ids": firstTwo, "projectId": pid, "replace": "x"])).status == 400)
+    check("bulk call with no ids -> 400",
+          await be.respond(method: "POST", url: url("/api/block/bulk/delete"),
+                           body: body(["ids": [Int](), "projectId": pid])).status == 400)
+    check("bulk call reaching outside the project -> 403",
+          await be.respond(method: "POST", url: url("/api/block/bulk/delete"),
+                           body: body(["ids": [999_999], "projectId": pid])).status == 403)
+
+    // Delete removes the named blocks and renumbers what is left.
+    let countBefore = current.count
+    _ = await be.respond(method: "POST", url: url("/api/block/bulk/delete"),
+                         body: body(["ids": firstTwo, "projectId": pid]))
+    current = await blockList()
+    check("bulk delete removed both", current.count == countBefore - 2,
+          "\(countBefore) -> \(current.count)")
+    check("orders renumbered after bulk delete",
+          current.enumerated().allSatisfy { $1["order"] as? Int == $0 + 1 })
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

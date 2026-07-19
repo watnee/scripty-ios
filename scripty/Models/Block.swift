@@ -21,6 +21,7 @@ struct Block: Decodable, Identifiable, Hashable, HALResource {
     var tags: String?
     var textAlign: String?
     var font: String?
+    var highlight: String?
     var textBold: Bool?
     var textItalic: Bool?
     var textUnderline: Bool?
@@ -28,9 +29,17 @@ struct Block: Decodable, Identifiable, Hashable, HALResource {
 
     private enum CodingKeys: String, CodingKey {
         case id, projectId, order, content, type, personId, personName
-        case bookmarked, pinned, scene, tags, textAlign, font
+        case bookmarked, pinned, scene, tags, textAlign, font, highlight
         case textBold, textItalic, textUnderline
         case links = "_links"
+    }
+
+    /// The tags on this block, as the writer sees them.
+    var tagList: [String] {
+        (tags ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// Unknown server types fall back to `.action` for rendering.

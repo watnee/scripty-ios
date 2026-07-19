@@ -17,11 +17,32 @@ struct ScriptSearchBar: View {
     let onDismiss: () -> Void
 
     @FocusState private var isFocused: Bool
+    @State private var confirmReplaceAll = false
+    @State private var resultMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
             Divider()
+            if search.isReplacing {
+                replaceRow
+                Divider()
+            }
             HStack(spacing: 10) {
+                // Only offer replace when the server advertised it.
+                if model.canReplace {
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            search.isReplacing.toggle()
+                        }
+                    } label: {
+                        Image(systemName: search.isReplacing
+                              ? "chevron.down.circle.fill" : "chevron.right.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(search.isReplacing ? "Hide Replace" : "Show Replace")
+                }
+
                 field
 
                 Text(search.statusText)
@@ -46,6 +67,7 @@ struct ScriptSearchBar: View {
 
                 Button("Done") {
                     search.clear()
+                    search.isReplacing = false
                     isFocused = false
                     onDismiss()
                 }
@@ -55,8 +77,20 @@ struct ScriptSearchBar: View {
             .padding(.vertical, 8)
         }
         .background(.bar)
+        .alert("Replace All", isPresented: $confirmReplaceAll) {
+            Button("Cancel", role: .cancel) {}
+            Button("Replace", role: .destructive) {
+                Task { await replaceAll() }
+            }
+        } message: {
+            let count = search.replaceTargetIds(in: model.blocks).count
+            Text("Replace every occurrence of “\(search.query)” in \(count) "
+                 + (count == 1 ? "element" : "elements") + "? This can be undone.")
+        }
         .onAppear { isFocused = true }
         .onChange(of: search.query) { _, _ in
+            // A new query makes the last replace's tally meaningless.
+            resultMessage = nil
             search.refresh(in: model.blocks)
             // Land on the first hit as soon as the query resolves to one.
             if let match = search.current { navigator.jump(to: match.blockId) }
@@ -91,6 +125,97 @@ struct ScriptSearchBar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Replacement text plus the switches that change what counts as a match.
+    private var replaceRow: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.2.squarepath")
+                        .foregroundStyle(.secondary)
+                    TextField("Replace with", text: $search.replacement)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+
+                Button("Replace All") {
+                    confirmReplaceAll = true
+                }
+                .font(.body.weight(.medium))
+                .disabled(replaceTargetCount == 0)
+            }
+
+            HStack(spacing: 12) {
+                toggle("Match Case", isOn: $search.matchCase)
+                toggle("Whole Word", isOn: $search.wholeWord)
+                toggle("Cues", isOn: $search.includeCharacterCues)
+
+                Spacer(minLength: 0)
+
+                // The find counter counts names and tags too, so replace shows
+                // its own tally of what would actually change.
+                Text(resultMessage ?? replaceScopeText)
+                    .font(.caption)
+                    .foregroundStyle(resultMessage == nil ? .secondary : .primary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private func toggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+            resultMessage = nil
+        } label: {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    isOn.wrappedValue ? AnyShapeStyle(.tint.opacity(0.18))
+                                      : AnyShapeStyle(.quaternary.opacity(0.4)),
+                    in: Capsule())
+                .foregroundStyle(isOn.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn.wrappedValue ? .isSelected : [])
+    }
+
+    private var replaceTargetCount: Int {
+        search.hasQuery ? search.replaceTargetIds(in: model.blocks).count : 0
+    }
+
+    private var replaceScopeText: String {
+        guard search.hasQuery else { return "" }
+        let count = replaceTargetCount
+        if count == 0 { return "Nothing to replace" }
+        return "\(count) " + (count == 1 ? "element" : "elements")
+    }
+
+    private func replaceAll() async {
+        let ids = search.replaceTargetIds(in: model.blocks)
+        guard !ids.isEmpty else { return }
+        let changed = await model.bulkReplace(
+            ids,
+            find: search.query.trimmingCharacters(in: .whitespacesAndNewlines),
+            replace: search.replacement,
+            matchCase: search.matchCase,
+            wholeWord: search.wholeWord,
+            includeCharacterCues: search.includeCharacterCues)
+
+        if let changed {
+            resultMessage = changed == 0
+                ? "No changes"
+                : "Replaced in \(changed) " + (changed == 1 ? "element" : "elements")
+        }
+        // The hits have moved; recompute against what came back.
+        search.refresh(in: model.blocks)
     }
 
     private func jump(_ match: ScriptSearchModel.Match?) {

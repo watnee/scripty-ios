@@ -22,6 +22,7 @@ struct ScriptView: View {
     @State private var showingPageSetup = false
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
+    @State private var selection = BlockSelectionModel()
 
     /// Presentation is a device preference shared across every project, so the
     /// model is the app-wide one rather than one per script.
@@ -121,7 +122,15 @@ struct ScriptView: View {
         .overlay { emptyState }
         .safeAreaInset(edge: .bottom) { editingBars }
         .safeAreaInset(edge: .bottom) { searchBar }
+        .safeAreaInset(edge: .bottom) { bulkBar }
         .environment(\.scriptTextScale, settings.textScale)
+    }
+
+    @ViewBuilder
+    private var bulkBar: some View {
+        if selection.isSelecting {
+            BulkActionBar(model: model, selection: selection)
+        }
     }
 
     /// The paper surface: read-only sheets with a pager.
@@ -167,7 +176,11 @@ struct ScriptView: View {
 
     @ViewBuilder
     private func row(for block: Block) -> some View {
-        if block.isEditable {
+        if selection.isSelecting {
+            SelectableBlockRow(block: block, isSelected: selection.isSelected(block.id)) {
+                selection.toggle(block.id)
+            }
+        } else if block.isEditable {
             EditableBlockRow(model: model, block: block)
         } else {
             BlockRowView(block: block)
@@ -204,7 +217,9 @@ struct ScriptView: View {
     /// focused and only for the affordances the server actually advertised.
     @ViewBuilder
     private var editingBars: some View {
-        if let id = model.focusedBlockId,
+        // Selection mode has its own bar, and nothing is focused for typing.
+        if !selection.isSelecting,
+           let id = model.focusedBlockId,
            let block = model.blocks.first(where: { $0.id == id }) {
             VStack(spacing: 0) {
                 if block.hasLink(.update) {
@@ -256,6 +271,14 @@ struct ScriptView: View {
                     Label("Outline", systemImage: "list.bullet.indent")
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                if model.canSelectBlocks && !settings.isPageView {
+                    Button {
+                        selection.isSelecting.toggle()
+                    } label: {
+                        Label("Select Elements", systemImage: "checklist")
+                    }
+                }
             }
 
             if model.canViewCharacters && !settings.isFocusMode {

@@ -42,6 +42,14 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let createInitial = Rel("createInitial")
     static let setType = Rel("setType")
     static let move = Rel("move")
+
+    // Bulk operations are advertised on the block collection, not on a block,
+    // because they act on a set of them.
+    static let bulkSetType = Rel("bulkSetType")
+    static let bulkAddTags = Rel("bulkAddTags")
+    static let bulkFormat = Rel("bulkFormat")
+    static let bulkDelete = Rel("bulkDelete")
+    static let bulkReplace = Rel("bulkReplace")
     static let export = Rel("export")
     static let exportPdf = Rel("exportPdf")
     static let exportDocx = Rel("exportDocx")

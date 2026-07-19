@@ -21,6 +21,54 @@ extension EnvironmentValues {
     }
 }
 
+extension BlockHighlight {
+    /// The tints from the web app's stylesheet, so a highlighted line looks the
+    /// same in either client. Each carries a light and a dark value — a
+    /// paper-coloured wash would go muddy in dark mode.
+    func color(for scheme: ColorScheme) -> Color {
+        let light: (Double, Double, Double)
+        let dark: (Double, Double, Double)
+        switch self {
+        case .yellow:
+            light = (0.992, 0.953, 0.827); dark = (0.294, 0.235, 0.078)
+        case .green:
+            light = (0.875, 0.949, 0.890); dark = (0.122, 0.251, 0.161)
+        case .blue:
+            light = (0.859, 0.914, 0.973); dark = (0.110, 0.227, 0.333)
+        case .red:
+            light = (0.984, 0.878, 0.867); dark = (0.302, 0.153, 0.141)
+        case .gray:
+            light = (0.914, 0.925, 0.937); dark = (0.227, 0.259, 0.314)
+        }
+        let (r, g, b) = scheme == .dark ? dark : light
+        return Color(red: r, green: g, blue: b)
+    }
+}
+
+/// Paints a block's highlight tint behind its text, and nothing when it has
+/// none. Shared so the read-only and editable rows tint identically.
+struct BlockHighlightBackground: ViewModifier {
+    let block: Block
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        if let highlight = BlockHighlight(serverValue: block.highlight) {
+            content
+                .padding(.horizontal, 4)
+                .background(highlight.color(for: colorScheme),
+                            in: RoundedRectangle(cornerRadius: 3))
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func blockHighlight(_ block: Block) -> some View {
+        modifier(BlockHighlightBackground(block: block))
+    }
+}
+
 struct BlockRowView: View {
     let block: Block
 
@@ -38,10 +86,35 @@ struct BlockRowView: View {
     }
 
     var body: some View {
-        elementView
-            .frame(maxWidth: Self.pageWidth, alignment: .leading)
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .topTrailing) { badges }
+        VStack(alignment: .leading, spacing: 2) {
+            elementView
+                .blockHighlight(block)
+            tagRow
+        }
+        .frame(maxWidth: Self.pageWidth, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) { badges }
+    }
+
+    /// Tags sit under the element as small badges, the way the web row shows
+    /// them. Nothing is drawn when a block has none.
+    @ViewBuilder
+    private var tagRow: some View {
+        let tags = block.tagList
+        if !tags.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.5), in: Capsule())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder

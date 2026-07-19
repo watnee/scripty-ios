@@ -80,12 +80,22 @@ final class ScriptModel {
         guard let link = project.link(.blocks) else { return }
         do {
             let collection: HALCollection<Block> = try await app.client.fetch(from: link)
-            blocks = collection.items.sorted { ($0.order ?? 0) < ($1.order ?? 0) }
-            blocksLinks = collection.links
+            adopt(collection)
             errorMessage = nil
         } catch {
             report(error)
         }
+    }
+
+    /// Replace the script with a block collection the server just returned.
+    ///
+    /// The bulk endpoints answer with the whole refreshed collection rather
+    /// than one resource, since retyping or deleting a set renumbers the rest;
+    /// adopting it wholesale saves a follow-up GET and keeps the advertised
+    /// affordances in step with the new contents.
+    func adopt(_ collection: HALCollection<Block>) {
+        blocks = collection.items.sorted { ($0.order ?? 0) < ($1.order ?? 0) }
+        blocksLinks = collection.links
     }
 
     func loadCharacters() async {

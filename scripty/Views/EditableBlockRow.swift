@@ -30,6 +30,7 @@ struct EditableBlockRow: View {
     var body: some View {
         BlockTextView(model: model, block: block,
                       font: uiFont, alignment: nsAlignment, autocapitalize: capitalization)
+            .blockHighlight(block)
             .frame(maxWidth: columnWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: pageAlignment)
             .padding(.top, topPadding)
