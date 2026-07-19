@@ -83,6 +83,8 @@ actor DemoBackend {
     private var nextVersionId = 1
     private var comments: [DemoComment] = []
     private var nextCommentId = 1
+    private var songEditions: [DemoSongEdition] = []
+    private var nextSongEditionId = 1
     private var deletedDocuments: [Int: [DeletedDemoDocument]] = [:]
     private var invitations: [DemoInvitation] = []
     private var nextInvitationId = 1
@@ -133,6 +135,12 @@ actor DemoBackend {
         case (_, "api", "document"):
             return routeDocument(method: method, path: Array(path.dropFirst(2)),
                                  query: query, fields: fields, body: body)
+        case (_, "api", "song"):
+            // Only editions are served here; this client edits a song as plain
+            // text and never reads its lyric blocks.
+            guard path.dropFirst(2).first == "edition" else { return notFound() }
+            return routeSongEdition(method: method, path: Array(path.dropFirst(3)),
+                                    query: query, fields: fields)
         case (_, "api", "actor"):
             return routeActor(method: method, path: Array(path.dropFirst(2)),
                               query: query, fields: fields)
@@ -770,6 +778,9 @@ actor DemoBackend {
         ]
         if isSong {
             links["shareEmail"] = link("/api/document/\(document.id)/share-email")
+            // Songs are lyric blocks on the server, so only they have editions
+            // to scope. A note is plain text with nothing to vary.
+            links["editions"] = link("/api/song/edition?documentId=\(document.id)")
         }
         var json: [String: Any] = [
             "id": document.id,
@@ -1221,6 +1232,145 @@ actor DemoBackend {
                 "self": link("/api/project/edition?projectId=\(projectId)"),
                 "create": link("/api/project/edition?projectId=\(projectId)"),
                 "project": link("/api/project/\(projectId)"),
+            ],
+        ])
+    }
+
+    // MARK: - Song editions
+
+    /// A named edition of a song. Songs are lyric blocks on the server, so an
+    /// edition scopes those; the demo tracks the count rather than the lines,
+    /// since this client edits a song as plain text and never reads its blocks.
+    private struct DemoSongEdition {
+        var id: Int
+        var documentId: Int
+        var name: String
+        var isDefault: Bool
+        var isPublished: Bool
+        var lastEdited: Date
+        var blockCount: Int
+    }
+
+    /// Every song has at least one edition, created on first sight rather than
+    /// up front — the server's ensureDefaultEdition does the same.
+    private func ensureSongEditions(_ documentId: Int) {
+        guard !songEditions.contains(where: { $0.documentId == documentId }) else { return }
+        songEditions.append(DemoSongEdition(
+            id: nextSongEditionId, documentId: documentId, name: "Original",
+            isDefault: true, isPublished: true, lastEdited: Date(), blockCount: 0))
+        nextSongEditionId += 1
+    }
+
+    private func routeSongEdition(method: String, path: [String],
+                                  query: [String: String],
+                                  fields: [String: Any]) -> (Int, Data) {
+        guard let documentId = query["documentId"].flatMap(Int.init),
+              locateDocument(documentId) != nil else { return badRequest("documentId") }
+        ensureSongEditions(documentId)
+
+        switch (method, path.count) {
+        case ("GET", 0):
+            return songEditionCollection(documentId)
+
+        case ("POST", 0):
+            guard let name = (fields["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                return badRequest("name")
+            }
+            let source = fields["copyFromEditionId"] as? Int
+            if let source,
+               !songEditions.contains(where: { $0.id == source && $0.documentId == documentId }) {
+                return badRequest("copyFromEditionId")
+            }
+            let copied = source.flatMap { id in
+                songEditions.first { $0.id == id }?.blockCount
+            } ?? 0
+            songEditions.append(DemoSongEdition(
+                id: nextSongEditionId, documentId: documentId, name: name,
+                isDefault: false, isPublished: false, lastEdited: Date(), blockCount: copied))
+            nextSongEditionId += 1
+            return songEditionCollection(documentId)
+
+        default:
+            break
+        }
+
+        guard let editionId = path.first.flatMap(Int.init),
+              let index = songEditions.firstIndex(where: {
+                  $0.id == editionId && $0.documentId == documentId
+              }) else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("PUT", nil):
+            guard let name = (fields["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                return badRequest("name")
+            }
+            songEditions[index].name = name
+            return songEditionCollection(documentId)
+
+        case ("DELETE", nil):
+            // A song always keeps somewhere to write.
+            guard songEditions.filter({ $0.documentId == documentId }).count > 1 else {
+                return (409, Data(#"{"edition":"That edition cannot be deleted."}"#.utf8))
+            }
+            let removed = songEditions.remove(at: index)
+            if removed.isDefault,
+               let next = songEditions.firstIndex(where: { $0.documentId == documentId }) {
+                songEditions[next].isDefault = true
+            }
+            return songEditionCollection(documentId)
+
+        case ("POST", "set-default"):
+            for i in songEditions.indices where songEditions[i].documentId == documentId {
+                songEditions[i].isDefault = (songEditions[i].id == editionId)
+            }
+            return songEditionCollection(documentId)
+
+        case ("POST", "set-published"):
+            for i in songEditions.indices where songEditions[i].documentId == documentId {
+                songEditions[i].isPublished = (songEditions[i].id == editionId)
+            }
+            return songEditionCollection(documentId)
+
+        default:
+            return notFound()
+        }
+    }
+
+    private func songEditionCollection(_ documentId: Int) -> (Int, Data) {
+        let mine = songEditions.filter { $0.documentId == documentId }
+        let items = mine.map { edition -> [String: Any] in
+            var links: [String: Any] = [
+                "songBlocks": link("/api/song/block?documentId=\(documentId)&editionId=\(edition.id)"),
+                "editions": link("/api/song/edition?documentId=\(documentId)"),
+                "update": link("/api/song/edition/\(edition.id)?documentId=\(documentId)"),
+            ]
+            if mine.count > 1 {
+                links["delete"] = link("/api/song/edition/\(edition.id)?documentId=\(documentId)")
+            }
+            if !edition.isDefault {
+                links["setDefault"] = link("/api/song/edition/\(edition.id)/set-default?documentId=\(documentId)")
+            }
+            if !edition.isPublished {
+                links["setPublished"] = link("/api/song/edition/\(edition.id)/set-published?documentId=\(documentId)")
+            }
+            return [
+                "id": edition.id,
+                "name": edition.name,
+                "default": edition.isDefault,
+                "published": edition.isPublished,
+                "lastEdited": iso.string(from: edition.lastEdited),
+                "blockCount": edition.blockCount,
+                "_links": links,
+            ]
+        }
+        return ok([
+            "_embedded": ["songEditionResourceList": items],
+            "_links": [
+                "self": link("/api/song/edition?documentId=\(documentId)"),
+                "create": link("/api/song/edition?documentId=\(documentId)"),
+                "document": link("/api/document/\(documentId)"),
             ],
         ])
     }

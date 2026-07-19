@@ -759,6 +759,74 @@ func run() async {
         }
     }
 
+    // --- SONG EDITIONS ---
+    //
+    // The song counterpart of script editions. Advertised on songs only — a
+    // note has no lyric blocks for an edition to scope.
+    // Its own song and note: the document-trash checks above purge their way
+    // through the seeded ones, so nothing earlier survives to be relied on.
+    let madeSongDoc = await be.respond(method: "POST", url: url("/api/document"),
+                                       body: body(["projectId": pid, "title": "Edition Check",
+                                                   "documentType": "SONG", "content": "A line."]))
+    let madeNoteDoc = await be.respond(method: "POST", url: url("/api/document"),
+                                       body: body(["projectId": pid, "title": "A Note",
+                                                   "documentType": "NOTES", "content": "Nothing."]))
+    let songDoc = json(madeSongDoc.data)
+    let noteDoc = json(madeNoteDoc.data)
+
+    check("a song advertises `editions`",
+          (songDoc["_links"] as? [String: Any])?["editions"] != nil)
+    check("a note does not",
+          (noteDoc["_links"] as? [String: Any])?["editions"] == nil)
+
+    if let songId = songDoc["id"] as? Int {
+        func songEditions() async -> [[String: Any]] {
+            embedded(json(await be.respond(method: "GET", url: url("/api/song/edition?documentId=\(songId)"), body: nil).data))
+        }
+
+        var songEds = await songEditions()
+        check("a song starts with one edition", songEds.count == 1, "got \(songEds.count)")
+        check("and it is the default", songEds.first?["default"] as? Bool == true)
+        check("the only edition offers no delete",
+              (songEds.first?["_links"] as? [String: Any])?["delete"] == nil)
+        check("an edition points at its lyrics",
+              (songEds.first?["_links"] as? [String: Any])?["songBlocks"] != nil)
+
+        let madeSong = await be.respond(method: "POST", url: url("/api/song/edition?documentId=\(songId)"),
+                                        body: body(["name": "Acoustic"]))
+        check("create song edition -> 200", madeSong.status == 200, "got \(madeSong.status)")
+        songEds = embedded(json(madeSong.data))
+        check("the song now has two editions", songEds.count == 2, "got \(songEds.count)")
+        check("both now offer delete",
+              songEds.allSatisfy { ($0["_links"] as? [String: Any])?["delete"] != nil })
+        check("a song edition needs a name -> 400",
+              await be.respond(method: "POST", url: url("/api/song/edition?documentId=\(songId)"),
+                               body: body(["name": " "])).status == 400)
+
+        if let acousticId = songEds.first(where: { $0["name"] as? String == "Acoustic" })?["id"] as? Int {
+            _ = await be.respond(method: "POST",
+                                 url: url("/api/song/edition/\(acousticId)/set-default?documentId=\(songId)"),
+                                 body: nil)
+            songEds = await songEditions()
+            check("setting a song default moves it",
+                  songEds.first { $0["id"] as? Int == acousticId }?["default"] as? Bool == true)
+            check("still exactly one song default",
+                  songEds.filter { $0["default"] as? Bool == true }.count == 1)
+
+            for edition in songEds where edition["id"] as? Int != acousticId {
+                if let id = edition["id"] as? Int {
+                    _ = await be.respond(method: "DELETE",
+                                         url: url("/api/song/edition/\(id)?documentId=\(songId)"),
+                                         body: nil)
+                }
+            }
+            check("deleting the last song edition -> 409",
+                  await be.respond(method: "DELETE",
+                                   url: url("/api/song/edition/\(acousticId)?documentId=\(songId)"),
+                                   body: nil).status == 409)
+        }
+    }
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 
