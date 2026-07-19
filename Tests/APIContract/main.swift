@@ -719,6 +719,46 @@ func run() async {
           await be.respond(method: "POST", url: url("/api/document/trash/999999/restore?projectId=\(pid)"),
                            body: nil).status == 404)
 
+    // --- BULK OPERATIONS ACROSS EDITIONS ---
+    //
+    // Regression. Selecting elements while reading a non-default edition and
+    // applying a bulk action used to come back 403: the ownership check looked
+    // only at the default edition's blocks. Every other check passed, because
+    // none of them combined the two features — it took tapping through the app
+    // to find. "The project" means every edition of it.
+    let editionForBulk = await be.respond(method: "POST", url: url("/api/project/edition?projectId=\(pid)"),
+                                          body: body(["name": "Bulk Check"]))
+    if let bulkEditionId = embedded(json(editionForBulk.data))
+        .first(where: { $0["name"] as? String == "Bulk Check" })?["id"] as? Int {
+
+        // Give it something of its own to act on.
+        _ = await be.respond(method: "POST", url: url("/api/block"),
+                             body: body(["projectId": pid, "content": "A line in the revision.",
+                                         "type": "ACTION"]))
+        let editionBlocks = embedded(json(await be.respond(
+            method: "GET", url: url("/api/block?projectId=\(pid)&editionId=\(bulkEditionId)"),
+            body: nil).data))
+
+        if let target = editionBlocks.first?["id"] as? Int {
+            let retyped = await be.respond(method: "POST", url: url("/api/block/bulk/type"),
+                                           body: body(["ids": [target], "projectId": pid,
+                                                       "type": "SCENE"]))
+            check("a bulk action on a non-default edition is not forbidden",
+                  retyped.status == 200, "got \(retyped.status)")
+
+            let formatted = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+                                             body: body(["ids": [target], "projectId": pid,
+                                                         "highlight": "yellow"]))
+            check("bulk formatting reaches a non-default edition",
+                  formatted.status == 200, "got \(formatted.status)")
+            check("and the change actually landed on that block",
+                  embedded(json(await be.respond(
+                      method: "GET", url: url("/api/block?projectId=\(pid)&editionId=\(bulkEditionId)"),
+                      body: nil).data))
+                      .first { $0["id"] as? Int == target }?["highlight"] as? String == "YELLOW")
+        }
+    }
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

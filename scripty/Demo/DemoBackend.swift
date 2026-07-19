@@ -1693,9 +1693,15 @@ actor DemoBackend {
         guard let projectId = fields["projectId"] as? Int, blocks[projectId] != nil else {
             return badRequest("projectId")
         }
-        // A caller may not reach outside the project it named.
-        let owned = Set((blocks[projectId] ?? []).map(\.id))
-        guard ids.allSatisfy(owned.contains) else { return (403, Data("{}".utf8)) }
+        // A caller may not reach outside the project it named — but "the
+        // project" means every edition of it, not just the default one. The
+        // first version of this checked only the default edition's blocks, so
+        // selecting elements while reading a revision and applying any bulk
+        // action came back 403. The real server checks the blocks belong to
+        // the project, which is edition-independent; this now matches.
+        guard ids.allSatisfy({ ownsBlock($0, projectId: projectId) }) else {
+            return (403, Data("{}".utf8))
+        }
 
         snapshot(projectId)
         let targets = Set(ids)
@@ -1727,13 +1733,20 @@ actor DemoBackend {
             }
 
         case "delete":
+            // Removes from wherever they live and renumbers that list, so a
+            // bulk delete works while reading a revision, not only the default.
             for removed in (blocks[projectId] ?? []) where targets.contains(removed.id) {
                 trashBlock(removed, projectId: projectId)
             }
             blocks[projectId]?.removeAll { targets.contains($0.id) }
-            var list = (blocks[projectId] ?? []).sorted { $0.order < $1.order }
-            for i in list.indices { list[i].order = i + 1 }
-            blocks[projectId] = list
+            renumber(&blocks[projectId])
+            for edition in editions where edition.projectId == projectId {
+                for removed in (editionBlocks[edition.id] ?? []) where targets.contains(removed.id) {
+                    trashBlock(removed, projectId: projectId)
+                }
+                editionBlocks[edition.id]?.removeAll { targets.contains($0.id) }
+                renumber(&editionBlocks[edition.id])
+            }
 
         case "format":
             if let align = fields["align"] as? String {
@@ -1792,14 +1805,43 @@ actor DemoBackend {
         return blockCollection(projectId)
     }
 
+    /// Restores contiguous 1-based ordering after a removal.
+    private func renumber(_ list: inout [DemoBlock]?) {
+        guard var blocks = list else { return }
+        blocks.sort { $0.order < $1.order }
+        for index in blocks.indices { blocks[index].order = index + 1 }
+        list = blocks
+    }
+
+    /// True when the block belongs to this project, in any of its editions.
+    private func ownsBlock(_ id: Int, projectId: Int) -> Bool {
+        if (blocks[projectId] ?? []).contains(where: { $0.id == id }) {
+            return true
+        }
+        return editions
+            .filter { $0.projectId == projectId }
+            .contains { (editionBlocks[$0.id] ?? []).contains(where: { $0.id == id }) }
+    }
+
+    /// Applies a change wherever the blocks actually live — the project's own
+    /// list, and every edition's — so a bulk action works the same whichever
+    /// edition the writer is reading.
     private func mutate(_ projectId: Int,
                         where ids: Set<Int>,
                         _ change: (inout DemoBlock) -> Void) {
-        guard var list = blocks[projectId] else { return }
-        for index in list.indices where ids.contains(list[index].id) {
-            change(&list[index])
+        if var list = blocks[projectId] {
+            for index in list.indices where ids.contains(list[index].id) {
+                change(&list[index])
+            }
+            blocks[projectId] = list
         }
-        blocks[projectId] = list
+        for edition in editions where edition.projectId == projectId {
+            guard var list = editionBlocks[edition.id] else { continue }
+            for index in list.indices where ids.contains(list[index].id) {
+                change(&list[index])
+            }
+            editionBlocks[edition.id] = list
+        }
     }
 
     /// Literal find-and-replace — `find` is never treated as a pattern and the
