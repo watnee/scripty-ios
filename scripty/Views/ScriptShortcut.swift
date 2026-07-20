@@ -31,7 +31,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
     case shortcutsReference
 
     // File & versions
-    case titlePage, versionHistory, importFile
+    case titlePage, versionHistory, importFile, printScript
     case export(Rel)
 
     // Text size
@@ -62,6 +62,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
         case .titlePage: return "titlePage"
         case .versionHistory: return "versionHistory"
         case .importFile: return "importFile"
+        case .printScript: return "printScript"
         case .export(let rel): return "export.\(rel.rawValue)"
         case .biggerText: return "biggerText"
         case .smallerText: return "smallerText"
@@ -92,6 +93,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
         case .titlePage: return "Title Page"
         case .versionHistory: return "Version History"
         case .importFile: return "Import File"
+        case .printScript: return "Print"
         case .export(let rel): return "Export \(Self.exportLabel(rel))"
         case .biggerText: return "Bigger Text"
         case .smallerText: return "Smaller Text"
@@ -128,6 +130,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
         case .titlePage: return "t"
         case .versionHistory: return "h"
         case .importFile: return "i"
+        case .printScript: return "p"
         case .export(let rel):
             switch rel {
             case .exportPdf: return "1"
@@ -155,7 +158,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
     var modifiers: EventModifiers {
         switch self {
         case .undo, .search, .bold, .italic, .underline,
-             .biggerText, .smallerText, .nextMatch:
+             .biggerText, .smallerText, .nextMatch, .printScript:
             return .command
         case .findReplace:
             return [.command, .option]
@@ -201,7 +204,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
              .focusMode, .pageView, .readScript, .outline, .documents,
              .shortcutsReference:
             return .navigation
-        case .titlePage, .versionHistory, .importFile, .export:
+        case .titlePage, .versionHistory, .importFile, .printScript, .export:
             return .file
         case .biggerText, .smallerText: return .textSize
         case .bold, .italic, .underline, .align: return .format
@@ -281,7 +284,7 @@ enum ScriptShortcutAction: Hashable, Identifiable {
 
         .biggerText, .smallerText,
 
-        .titlePage, .versionHistory, .importFile,
+        .titlePage, .versionHistory, .importFile, .printScript,
         .export(.exportPdf), .export(.exportDocx),
         .export(.exportFdx), .export(.export),
     ]

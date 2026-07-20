@@ -233,6 +233,8 @@ struct ScriptView: View {
             // The button that owns the picker is in the overflow menu, which
             // focus mode clears out along with everything else.
             return model.project.hasLink(.importScript) && !settings.isFocusMode
+        case .printScript:
+            return model.printOption != nil
         case .export(let rel):
             return model.exportOptions.contains { $0.rel == rel } && !settings.isFocusMode
 
@@ -278,6 +280,7 @@ struct ScriptView: View {
         case .titlePage: showingTitlePage = true
         case .versionHistory: showingVersions = true
         case .importFile: importRequest = true
+        case .printScript: printScript()
         case .export(let rel): exportFromKeyboard(rel)
 
         case .biggerText: settings.increaseTextSize()
@@ -315,6 +318,19 @@ struct ScriptView: View {
                 // second one: a view may carry only one `.alert`, and adding
                 // another silently stopped every sheet on this page from
                 // presenting at all — including from the toolbar.
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Downloads the PDF export and opens the system print panel on it.
+    private func printScript() {
+        guard let option = model.printOption else { return }
+        Task {
+            do {
+                let url = try await model.export(option)
+                ScriptPrinter.present(pdf: url, jobName: model.project.displayTitle)
+            } catch {
                 model.errorMessage = error.localizedDescription
             }
         }

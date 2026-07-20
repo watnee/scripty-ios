@@ -30,6 +30,17 @@ struct ExportButton: View {
                     export(option)
                 }
             }
+            // Its own section: printing produces no file, so it does not
+            // belong in a list of things you get a copy of.
+            if let printable = model.printOption {
+                Section {
+                    Button {
+                        printScript(printable)
+                    } label: {
+                        Label("Print…", systemImage: "printer")
+                    }
+                }
+            }
         } label: {
             if isExporting {
                 ProgressView()
@@ -52,6 +63,21 @@ struct ExportButton: View {
         Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } })
+    }
+
+    /// Downloads the PDF and opens the system print panel on it, reusing the
+    /// same spinner an export gets — the wait is the same download.
+    private func printScript(_ option: ScriptModel.ExportOption) {
+        isExporting = true
+        Task {
+            do {
+                let url = try await model.export(option)
+                ScriptPrinter.present(pdf: url, jobName: model.project.displayTitle)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isExporting = false
+        }
     }
 
     private func export(_ option: ScriptModel.ExportOption) {

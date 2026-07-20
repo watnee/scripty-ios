@@ -678,16 +678,45 @@ final class ScriptModel {
         var isPaged: Bool { rel == .exportPdf }
     }
 
+    /// Every export the server offered, in menu order.
+    ///
+    /// The archive is deliberately last and named for what it is for rather
+    /// than for its format: it is the only entry here that is not a copy of
+    /// the screenplay to send someone, and a writer looking for "Word" should
+    /// not have to read past a `.scripty.json` to find it.
     var exportOptions: [ExportOption] {
         let all: [(Rel, String, String)] = [
             (.exportPdf, "PDF", "pdf"),
             (.export, "Fountain", "fountain"),
             (.exportDocx, "Word", "docx"),
             (.exportFdx, "Final Draft", "fdx"),
+            (.exportEpub, "EPUB", "epub"),
+            (.exportArchive, "Project Archive", "scripty.json"),
         ]
         return all.compactMap { rel, label, ext in
             project.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
         }
+    }
+
+    /// The formats this song can be taken away in.
+    ///
+    /// Advertised on the document rather than the project, and outside the
+    /// server's edit gate, so a view-only collaborator still gets the menu.
+    func songExportOptions(for document: TextDocument) -> [ExportOption] {
+        let all: [(Rel, String, String)] = [
+            (.exportSongPdf, "PDF", "pdf"),
+            (.exportSongTxt, "Text", "txt"),
+            (.exportSongDocx, "Word", "docx"),
+            (.exportSongEpub, "EPUB", "epub"),
+        ]
+        return all.compactMap { rel, label, ext in
+            document.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
+        }
+    }
+
+    /// The PDF export, when the server offers one — what Print renders from.
+    var printOption: ExportOption? {
+        exportOptions.first { $0.rel == .exportPdf }
     }
 
     /// Downloads an export with auth and writes it to a shareable temp file.
@@ -696,17 +725,30 @@ final class ScriptModel {
     /// the sheets they were just looking at in page view rather than falling
     /// back to the server's defaults. Page setup is a device preference, so it
     /// is read from the shared presentation settings at the moment of export.
-    func export(_ option: ExportOption) async throws -> URL {
+    ///
+    /// `named` is what the file is called before its extension — the project
+    /// title for a screenplay, the song's title for a song. A song exported
+    /// under the screenplay's name is indistinguishable from the screenplay
+    /// once it is sitting in Files.
+    func export(_ option: ExportOption, named: String? = nil) async throws -> URL {
         let link = option.isPaged
             ? option.link.addingQuery(PresentationSettings.shared.pageSetup.exportQuery)
             : option.link
         let data = try await app.client.data(for: link)
-        let safeTitle = project.displayTitle
-            .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
-            .joined()
-        let name = (safeTitle.isEmpty ? "script" : safeTitle) + "." + option.fileExtension
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(Self.fileName(named ?? project.displayTitle,
+                                                  fallback: "script",
+                                                  extension: option.fileExtension))
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// A title turned into something a file system will accept.
+    private static func fileName(_ title: String, fallback: String, extension ext: String) -> String {
+        let safe = title
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (safe.isEmpty ? fallback : safe) + "." + ext
     }
 }

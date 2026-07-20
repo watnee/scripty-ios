@@ -245,6 +245,10 @@ actor DemoBackend {
                        "title": projects[index].title,
                        "_links": ["self": link("/api/project/\(id)/sync-status")]])
         case ("GET", "export"):
+            // The format is the last path segment; `export` alone is Fountain.
+            if path.count > 2, path[2] == "archive" {
+                return archiveExport(projects[index])
+            }
             return (200, Data(fountainExport(projects[index]).utf8))
         case ("POST", "toggleDefault"):
             defaultProjectId = (defaultProjectId == id) ? nil : id
@@ -698,6 +702,9 @@ actor DemoBackend {
             return insertDocument(document: documents[projectId]![index],
                                   afterBlockId: fields["afterBlockId"] as? Int,
                                   asType: fields["asType"] as? String)
+        case ("GET", "export"):
+            let document = documents[projectId]![index]
+            return (200, Data(songTextExport(document).utf8))
         case ("POST", "share-email"):
             let email = (fields["email"] as? String) ?? ""
             if email.isBlank { return badRequest("email") }
@@ -785,6 +792,8 @@ actor DemoBackend {
         ]
         if isSong {
             links["shareEmail"] = link("/api/document/\(document.id)/share-email")
+            // Text only, for the same reason the project offers no PDF here.
+            links["exportTxt"] = link("/api/document/\(document.id)/export/txt")
             // Songs are lyric blocks on the server, so only they have editions
             // to scope. A note is plain text with nothing to vary.
             links["editions"] = link("/api/song/edition?documentId=\(document.id)")
@@ -1987,6 +1996,11 @@ actor DemoBackend {
                 "undoRedoStatus": link("/api/project/\(project.id)/undo-redo-status"),
                 "syncStatus": link("/api/project/\(project.id)/sync-status"),
                 "export": link("/api/project/\(project.id)/export/fountain"),
+                // Only the two the demo can actually render. PDF, Word, Final
+                // Draft and EPUB need engines this backend does not carry, and
+                // advertising a link that returns nothing would be worse than
+                // showing no menu entry — the whole point of rel-gating.
+                "exportArchive": link("/api/project/\(project.id)/export/archive"),
                 "actors": link("/api/actor?projectId=\(project.id)"),
                 "importScript": link("/api/project/\(project.id)/import-script"),
                 "versions": link("/api/project/version?projectId=\(project.id)"),
@@ -2276,6 +2290,32 @@ actor DemoBackend {
     }
 
     // MARK: - Export
+
+    /// The project as a `.scripty.json` archive — the shape `demoImport` reads
+    /// back, so an archive exported here can be imported here.
+    private func archiveExport(_ project: DemoProject) -> (Int, Data) {
+        let payload: [String: Any] = [
+            "title": project.title,
+            "blocks": (blocks[project.id] ?? [])
+                .sorted { $0.order < $1.order }
+                .map { ["order": $0.order, "type": $0.type, "content": $0.content] },
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload,
+                                                     options: [.prettyPrinted, .sortedKeys]) else {
+            return (500, Data())
+        }
+        return (200, data)
+    }
+
+    /// A song as plain lyrics, one line per block — what the server's TXT
+    /// export produces.
+    private func songTextExport(_ document: DemoDocument) -> String {
+        let lyrics = songBlocks[document.id]?
+            .sorted { $0.order < $1.order }
+            .map(\.content)
+            .joined(separator: "\n")
+        return ([document.title, ""] + [lyrics ?? document.content]).joined(separator: "\n")
+    }
 
     private func fountainExport(_ project: DemoProject) -> String {
         var lines = ["Title: \(project.title)", ""]

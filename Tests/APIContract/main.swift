@@ -30,6 +30,13 @@ func run() async {
     let p0 = embedded(projects)[0]
     let pid = p0["id"] as! Int
     check("project advertises `importScript`", links(p0)["importScript"] != nil)
+    let p0Links = links(p0)
+    check("project advertises `exportArchive`", p0Links["exportArchive"] != nil)
+    // Rel-gating cuts both ways: the demo renders no PDF, so it must not
+    // claim one. A menu entry that downloads nothing is the failure this
+    // whole link-driven design exists to prevent.
+    let advertisesPdf = p0Links["exportPdf"] != nil
+    check("demo does not advertise `exportPdf`", !advertisesPdf)
     check("project advertises `actors`", links(p0)["actors"] != nil)
 
     // --- TITLE PAGE: partial PUT must not blank siblings ---

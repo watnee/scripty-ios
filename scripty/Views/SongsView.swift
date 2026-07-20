@@ -35,6 +35,8 @@ struct SongsView: View {
     @State private var trashLink: HALLink?
     @State private var isLoading = false
     @State private var statusMessage: String?
+    /// A finished song export waiting to be shared.
+    @State private var exportedFile: ExportButton.ExportedFile?
 
     /// The import link is advertised on the collection only for editors, so it
     /// doubles as the "can add/import" gate — the same rule the web uses.
@@ -108,6 +110,12 @@ struct SongsView: View {
             } message: {
                 Text(statusMessage ?? "")
             }
+            // A sheet rather than a fourth alert on this view: a failed export
+            // is reported through statusMessage above, because more than one
+            // alert on a view stops the others — and the sheets — presenting.
+            .sheet(item: $exportedFile) { file in
+                ShareSheet(items: [file.url])
+            }
         }
     }
 
@@ -166,6 +174,18 @@ struct SongsView: View {
                     sharingDocument = document
                 } label: {
                     Label("Email…", systemImage: "envelope")
+                }
+            }
+            // Only songs are advertised export links, so notes show no
+            // submenu at all rather than an empty one.
+            let exports = model.songExportOptions(for: document)
+            if !exports.isEmpty {
+                Menu {
+                    ForEach(exports) { option in
+                        Button(option.label) { export(document, as: option) }
+                    }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
             }
             if document.hasLink(.delete) {
@@ -274,6 +294,20 @@ struct SongsView: View {
             statusMessage = ok
                 ? "Emailed \"\(document.displayTitle)\" to \(email)."
                 : (model.errorMessage ?? "Could not email that song.")
+        }
+    }
+
+    /// Downloads one song in one format and hands it to a share sheet. Named
+    /// for the song rather than the project, so several songs exported from
+    /// one screenplay stay tellable apart in Files.
+    private func export(_ document: TextDocument, as option: ScriptModel.ExportOption) {
+        Task {
+            do {
+                let url = try await model.export(option, named: document.displayTitle)
+                exportedFile = ExportButton.ExportedFile(url: url)
+            } catch {
+                statusMessage = error.localizedDescription
+            }
         }
     }
 
