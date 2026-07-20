@@ -43,6 +43,16 @@ swiftc -o "$BUILD/pagination" \
 "$BUILD/pagination" || status=1
 
 echo
+echo "== Script autocomplete =="
+swiftc -o "$BUILD/autocomplete" \
+    "$SRC/Models/Block.swift" \
+    "$SRC/Models/Person.swift" \
+    "$SRC/Models/ScriptAutocomplete.swift" \
+    "${SHARED[@]}" \
+    "$ROOT/Tests/Autocomplete/main.swift"
+"$BUILD/autocomplete" || status=1
+
+echo
 echo "== Demo backend API contract =="
 swiftc -o "$BUILD/api" \
     "$SRC/Demo/DemoBackend.swift" \

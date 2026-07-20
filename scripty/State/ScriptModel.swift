@@ -48,6 +48,13 @@ final class ScriptModel {
     /// One-shot caret placements the text views apply and clear (used after a
     /// split or merge moves focus to a specific offset).
     var caretRequests: [Int: Int] = [:]
+    /// One-shot text replacements the text views apply and clear.
+    ///
+    /// `liveText` means "the view is authoritative, leave it alone", which is
+    /// right for typing and wrong for anything that rewrites the field out
+    /// from under the writer. Accepting a completion does exactly that, so it
+    /// needs a way to say "and this time, take the model's word for it".
+    var textRequests: [Int: String] = [:]
 
     private var commitTasks: [Int: Task<Void, Never>] = [:]
     private static let commitDebounce: Duration = .milliseconds(600)
@@ -328,6 +335,70 @@ final class ScriptModel {
         await loadBlocks()
         await refreshUndoRedo()
         focus(updatedPrevious.id, caret: seam)
+    }
+
+    // MARK: - Autocomplete
+
+    /// Completions for whatever holds the caret. Empty unless a block is
+    /// focused, since there is nothing to complete into otherwise.
+    var suggestions: [ScriptAutocomplete.Suggestion] {
+        guard let id = focusedBlockId,
+              let block = blocks.first(where: { $0.id == id }),
+              block.hasLink(.update)
+        else { return [] }
+        return ScriptAutocomplete.suggestions(for: currentText(block),
+                                              type: block.blockType,
+                                              blocks: blocks,
+                                              characters: characters)
+    }
+
+    /// Accept a completion: the element becomes the suggestion's replacement
+    /// line and the caret lands at the end of it, ready to keep typing.
+    ///
+    /// Goes through `liveEdit` rather than straight to the server so the text
+    /// view picks the new text up the same way it picks up typing, and the
+    /// existing debounce does the saving. Accepting a completion is not a
+    /// different kind of edit from making it by hand.
+    func accept(_ suggestion: ScriptAutocomplete.Suggestion) {
+        guard let id = focusedBlockId,
+              blocks.contains(where: { $0.id == id }) else { return }
+        // Only a request. The text view applies it and then reports it back
+        // through `liveEdit`, exactly as if it had been typed — so there is
+        // one source of truth for the field's text at every moment, and the
+        // existing debounce does the saving.
+        textRequests[id] = suggestion.replacement
+        caretRequests[id] = suggestion.replacement.count
+    }
+
+    // MARK: - Duplicating
+
+    /// True when this element can be copied below itself.
+    ///
+    /// Gated on `createBelow` rather than on a `duplicate` rel: the server
+    /// advertises duplicate for documents but not for elements, and a copy is
+    /// exactly a create-below carrying the original's text and type. Asking
+    /// the server for a rel it has no reason to add would leave the affordance
+    /// permanently out of reach.
+    func canDuplicate(_ block: Block) -> Bool { block.hasLink(.createBelow) }
+
+    /// Insert a copy of `block` directly beneath it and focus the copy — the
+    /// writer duplicated it to change something, so the caret goes to the copy
+    /// rather than leaving them to find it.
+    func duplicateBlock(_ block: Block) async {
+        guard let link = block.link(.createBelow) else { return }
+        do {
+            let created: Block = try await app.client.fetch(
+                from: link, method: "POST",
+                body: CreateBelowCommand(content: currentText(block),
+                                         personId: block.personId,
+                                         type: block.blockType.rawValue))
+            await loadBlocks()
+            await refreshUndoRedo()
+            focus(created.id, caret: 0)
+            errorMessage = nil
+        } catch {
+            report(error)
+        }
     }
 
     /// Retype a block in place (the element-type bar and Tab cycling).

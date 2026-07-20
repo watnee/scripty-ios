@@ -29,6 +29,9 @@ struct BlockTextView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.smartDashesType = .no
         view.smartQuotesType = .no
+        // Off, or replacing the field's text pads the insertion with a space:
+        // accepting the completion "DEV" over a typed "D" produced "D EV".
+        view.smartInsertDeleteType = .no
         view.text = model.currentText(block)
         view.onDeleteBackwardAtStart = { [weak coordinator = context.coordinator] in
             coordinator?.backspaceAtStart()
@@ -74,6 +77,15 @@ struct BlockTextView: UIViewRepresentable {
             view.text = desired
         }
 
+        // An explicit request outranks the liveText rule above: accepting a
+        // completion rewrites the field deliberately, which is the one case
+        // where the model, not the view, has the newer text.
+        if let requested = model.textRequests[block.id] {
+            if view.text != requested { replaceAll(in: view, with: requested) }
+            let blockId = block.id
+            DispatchQueue.main.async { model.textRequests[blockId] = nil }
+        }
+
         // After the text sync, never before: assigning `.text` rebuilds the
         // storage from the view's plain font/colour, dropping the underline
         // attribute, so styling has to be re-stamped on top of the new string.
@@ -93,6 +105,26 @@ struct BlockTextView: UIViewRepresentable {
                 model.caretRequests[blockId] = nil
             }
         }
+    }
+
+    /// Swap the field's whole contents through the text-input protocol.
+    ///
+    /// Assigning `.text` is not enough while the view is first responder: the
+    /// live input session still holds the keystroke that is being completed,
+    /// and reconciling the two padded the result — accepting "DEV" over a
+    /// typed "D" produced "D EV". `replace(_:withText:)` goes through the same
+    /// path as typing, so the session is updated rather than contradicted, and
+    /// it calls the delegate, which is what reports the new text back to the
+    /// model and arms the debounced save.
+    private func replaceAll(in view: BlockUITextView, with text: String) {
+        // A composition in progress would otherwise survive the replacement.
+        view.unmarkText()
+        let whole = view.textRange(from: view.beginningOfDocument, to: view.endOfDocument)
+        guard let whole else {
+            view.text = text
+            return
+        }
+        view.replace(whole, withText: text)
     }
 
     private func apply(font: UIFont, alignment: NSTextAlignment,

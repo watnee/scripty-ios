@@ -73,6 +73,13 @@ struct EditableBlockRow: View {
                 Label("Move Down", systemImage: "arrow.down")
             }
         }
+        if model.canDuplicate(block) {
+            Button {
+                Task { await model.duplicateBlock(block) }
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+        }
         if block.hasLink(.togglePinned) {
             Button {
                 Task { await model.togglePinned(block) }

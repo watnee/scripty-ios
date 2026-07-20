@@ -550,6 +550,13 @@ struct ScriptView: View {
            let id = model.focusedBlockId,
            let block = model.blocks.first(where: { $0.id == id }) {
             VStack(spacing: 0) {
+                // Above the format bar, so it sits nearest the keyboard and
+                // nearest the text it completes.
+                let suggestions = model.suggestions
+                if !suggestions.isEmpty {
+                    AutocompleteBar(suggestions: suggestions) { model.accept($0) }
+                    Divider()
+                }
                 if block.hasLink(.update) {
                     FormatBar(model: model, block: block)
                     Divider()
