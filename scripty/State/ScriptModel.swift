@@ -716,6 +716,44 @@ final class ScriptModel {
         return await updateDocument(full, title: title, content: full.content ?? "")
     }
 
+    /// Whether songs & notes can be dragged into a new order — advertised on
+    /// the collection for an editor, so it doubles as the "may reorder" gate.
+    var canReorderDocuments: Bool { documentsLinks.contains(.reorder) }
+
+    /// Reorders songs & notes to the given sequence. The local list settles
+    /// first so the drag lands without a flicker; the server's answer then
+    /// replaces it, or a failure reloads the order it actually kept.
+    @discardableResult
+    func reorderDocuments(_ ordered: [TextDocument]) async -> Bool {
+        guard let link = documentsLinks[.reorder] else { return false }
+        let orderedIds = ordered.map(\.id)
+        applyLocalOrder(orderedIds)
+        do {
+            let collection: HALCollection<TextDocument> = try await app.client.fetch(
+                from: link, method: "POST", body: ReorderDocumentsCommand(orderedIds: orderedIds))
+            documents = collection.items.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
+            documentsLinks = collection.links
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            await loadDocuments()   // fall back to the order the server kept
+            return false
+        }
+    }
+
+    /// Applies a new sequence to the in-memory list by rewriting the moved
+    /// documents' sort order to their position, mirroring the server so the
+    /// optimistic view matches what comes back.
+    private func applyLocalOrder(_ orderedIds: [Int]) {
+        for (position, id) in orderedIds.enumerated() {
+            if let index = documents.firstIndex(where: { $0.id == id }) {
+                documents[index].sortOrder = position
+            }
+        }
+        documents.sort { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
+    }
+
     func deleteDocument(_ document: TextDocument) async {
         guard let link = document.link(.delete) else { return }
         do {
@@ -815,23 +853,46 @@ final class ScriptModel {
         exportOptions.first { $0.rel == .exportPdf }
     }
 
-    /// Downloads an export with auth and writes it to a shareable temp file.
+    /// The formats a single song advertises. Song-only, matching the server:
+    /// SongExportService lays lyrics out as a song, which is not what a note
+    /// wants, so a note carries none of these links.
+    func songExportOptions(for document: TextDocument) -> [ExportOption] {
+        let all: [(Rel, String, String)] = [
+            (.exportSongTxt, "Text", "txt"),
+            (.exportSongPdf, "PDF", "pdf"),
+            (.exportSongDocx, "Word", "docx"),
+            (.exportSongEpub, "EPUB", "epub"),
+        ]
+        return all.compactMap { rel, label, ext in
+            document.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
+        }
+    }
+
+    /// Downloads an export with auth and writes it to a shareable temp file,
+    /// named after whatever is being exported.
     ///
     /// A paged export carries the writer's own page setup, so the PDF matches
     /// the sheets they were just looking at in page view rather than falling
     /// back to the server's defaults. Page setup is a device preference, so it
     /// is read from the shared presentation settings at the moment of export.
-    func export(_ option: ExportOption) async throws -> URL {
+    /// A song's own PDF is not `exportPdf`, so it keeps the server's song
+    /// layout untouched — page setup applies to the screenplay, not a lyric.
+    func downloadExport(_ option: ExportOption, named baseName: String) async throws -> URL {
         let link = option.isPaged
             ? option.link.addingQuery(PresentationSettings.shared.pageSetup.exportQuery)
             : option.link
         let data = try await app.client.data(for: link)
-        let safeTitle = project.displayTitle
+        let safeTitle = baseName
             .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
             .joined()
-        let name = (safeTitle.isEmpty ? "script" : safeTitle) + "." + option.fileExtension
+        let name = (safeTitle.isEmpty ? "export" : safeTitle) + "." + option.fileExtension
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// The script export, named after the project.
+    func export(_ option: ExportOption) async throws -> URL {
+        try await downloadExport(option, named: project.displayTitle.isEmpty ? "script" : project.displayTitle)
     }
 }

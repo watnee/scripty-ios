@@ -70,7 +70,9 @@ extension View {
     }
 }
 
-private struct ShareSheet: UIViewControllerRepresentable {
+/// Shared by the script export button and the per-song export menu, so a
+/// downloaded file reaches the system share sheet the same way from both.
+struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

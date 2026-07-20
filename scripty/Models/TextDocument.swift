@@ -79,6 +79,12 @@ struct EditDocumentCommand: Encodable {
     var content: String
 }
 
+/// A project's songs & notes in their new order, by id. The server reassigns
+/// sort order to match, so only the ids being moved need to be sent.
+struct ReorderDocumentsCommand: Encodable {
+    var orderedIds: [Int]
+}
+
 /// Insert a document's content into the screenplay as blocks.
 /// Omitting `afterBlockId` appends after the last block; `asType` overrides
 /// the default Fountain type (LYRICS for songs).

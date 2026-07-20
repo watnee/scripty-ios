@@ -173,11 +173,11 @@ struct EditableBlockRow: View {
         return base * textScale
     }
 
+    /// Whether this line auto-capitalizes as the writer types. Scene headings,
+    /// cues, transitions and shots default to caps, but each is a preference the
+    /// server stores — turning one off matches the case the export will carry.
     private var capitalization: UITextAutocapitalizationType {
-        switch block.blockType {
-        case .scene, .character, .dualDialogue, .transition, .shot: return .allCharacters
-        default: return .sentences
-        }
+        CapitalizationSettings.shared.isOn(forBlockType: block.blockType) ? .allCharacters : .sentences
     }
 
     private var uiFont: UIFont {

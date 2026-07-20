@@ -59,6 +59,15 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     /// The whole project as a `.scripty.json` bundle — the format `importProject`
     /// reads back, so this is the round trip that moves a project between servers.
     static let exportArchive = Rel("exportArchive")
+
+    /// A single song, exported in the formats SongExportService offers. Advertised
+    /// on each song document, not on the project — a note has no song layout to
+    /// export, so these appear only for songs.
+    static let exportSongTxt = Rel("exportSongTxt")
+    static let exportSongPdf = Rel("exportSongPdf")
+    static let exportSongDocx = Rel("exportSongDocx")
+    static let exportSongEpub = Rel("exportSongEpub")
+
     static let headshot = Rel("headshot")
     static let documents = Rel("documents")
     static let document = Rel("document")
@@ -66,6 +75,10 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let shareEmail = Rel("shareEmail")
     static let importDocument = Rel("importDocument")
     static let importScript = Rel("importScript")
+
+    /// New order for a project's songs & notes, advertised on the document
+    /// collection for an editor. The client posts the ids in their new sequence.
+    static let reorder = Rel("reorder")
 
     // Version history. The server has offered these all along.
     static let versions = Rel("versions")
@@ -103,4 +116,8 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let editions = Rel("editions")
     static let setDefault = Rel("setDefault")
     static let setPublished = Rel("setPublished")
+
+    // Editor preferences the server keeps because exports bake them in.
+    // Advertised on the API root; `update` (declared above) posts a change.
+    static let capitalizationPreferences = Rel("capitalizationPreferences")
 }

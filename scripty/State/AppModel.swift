@@ -56,6 +56,7 @@ final class AppModel {
             guard token == session else { return }
             apiRoot = root
             phase = .signedIn
+            loadEditorPreferences()
         } catch APIError.unauthorized {
             guard token == session else { return }
             client.credentials = nil
@@ -85,6 +86,7 @@ final class AppModel {
             }
             signInError = nil
             phase = .signedIn
+            loadEditorPreferences()
         } catch APIError.unauthorized {
             client.credentials = nil
             signInError = "Incorrect username or password."
@@ -109,6 +111,7 @@ final class AppModel {
             isDemo = true
             signInError = nil
             phase = .signedIn
+            loadEditorPreferences()
         } catch {
             signInError = error.localizedDescription
             phase = .signedOut
@@ -127,6 +130,19 @@ final class AppModel {
         apiRoot = nil
         signInError = nil
         phase = .signedOut
+        CapitalizationSettings.shared.reset()
+    }
+
+    /// Loads the server-stored editor preferences once signed in, if the root
+    /// advertises them. Fire-and-forget: the editor already shows the cached (or
+    /// default) value, so nothing waits on this, and a failure is silent.
+    private func loadEditorPreferences() {
+        guard let link = apiRoot?.link(.capitalizationPreferences) else {
+            CapitalizationSettings.shared.reset()
+            return
+        }
+        let loadClient = client
+        Task { await CapitalizationSettings.shared.load(using: loadClient, from: link) }
     }
 
     /// Global error routing: revoked credentials end the session.

@@ -157,9 +157,48 @@ actor DemoBackend {
         case (_, "api", "team"):
             return routeTeam(method: method, path: Array(path.dropFirst(2)),
                              query: query, fields: fields)
+        case (_, "api", "preferences"):
+            return routePreferences(method: method, path: Array(path.dropFirst(2)),
+                                    fields: fields)
         default:
             return notFound()
         }
+    }
+
+    // MARK: - Editor preferences
+
+    /// Auto-capitalization is per element and stored on the server; the demo
+    /// keeps the same four flags in memory so the toggles persist for the
+    /// session and a re-read reflects what was set.
+    private var capitalization: [String: Bool] = [
+        "scene": true, "character": true, "transition": true, "shot": true,
+    ]
+
+    private func routePreferences(method: String, path: [String],
+                                  fields: [String: Any]) -> (Int, Data) {
+        guard path.first == "capitalization" else { return notFound() }
+        switch method {
+        case "GET":
+            return ok(capitalizationJSON())
+        case "POST":
+            // Partial: only the posted fields change, matching the server so a
+            // single toggle need not resend the others.
+            for key in ["scene", "character", "transition", "shot"] {
+                if let value = fields[key] as? Bool { capitalization[key] = value }
+            }
+            return ok(capitalizationJSON())
+        default:
+            return notFound()
+        }
+    }
+
+    private func capitalizationJSON() -> [String: Any] {
+        var json: [String: Any] = capitalization
+        json["_links"] = [
+            "self": link("/api/preferences/capitalization"),
+            "update": link("/api/preferences/capitalization"),
+        ]
+        return json
     }
 
     private func routeProject(method: String, path: [String],
@@ -662,6 +701,7 @@ actor DemoBackend {
                        "_links": ["self": link(selfHref),
                                   "project": link("/api/project/\(projectId)"),
                                   "importDocument": link("/api/document/import"),
+                                  "reorder": link("/api/document/reorder?projectId=\(projectId)"),
                                   "trash": link("/api/document/trash?projectId=\(projectId)")]])
         case ("POST", nil):
             guard let projectId = fields["projectId"] as? Int,
@@ -683,6 +723,11 @@ actor DemoBackend {
         // document id, so it is picked off before the numeric lookup.
         if path.first == "trash" {
             return routeDocumentTrash(method: method, path: Array(path.dropFirst()), query: query)
+        }
+
+        // `/api/document/reorder` is likewise a sibling, not an id.
+        if method == "POST", path.first == "reorder" {
+            return reorderDocuments(query: query, fields: fields)
         }
 
         guard let id = path.first.flatMap(Int.init),
@@ -716,8 +761,47 @@ actor DemoBackend {
             return ok(["shared": true,
                        "title": documents[projectId]![index].title,
                        "email": email])
+        case ("GET", "export-song"):
+            return demoSongExport(documents[projectId]![index], format: query["format"] ?? "txt")
         default:
             return notFound()
+        }
+    }
+
+    /// Reassigns sort order to the supplied sequence, exactly as the server
+    /// does — ids from another project or unknown ids reject the whole request.
+    private func reorderDocuments(query: [String: String], fields: [String: Any]) -> (Int, Data) {
+        guard let projectId = query["projectId"].flatMap(Int.init),
+              documents[projectId] != nil else { return badRequest("projectId") }
+        let orderedIds = (fields["orderedIds"] as? [Any])?.compactMap { $0 as? Int } ?? []
+        guard !orderedIds.isEmpty else { return badRequest("orderedIds") }
+        let existing = Set((documents[projectId] ?? []).map(\.id))
+        guard orderedIds.allSatisfy(existing.contains) else {
+            return badRequest("orderedIds")
+        }
+        for (position, id) in orderedIds.enumerated() {
+            if let index = documents[projectId]?.firstIndex(where: { $0.id == id }) {
+                documents[projectId]?[index].sortOrder = position
+            }
+        }
+        let items = (documents[projectId] ?? [])
+            .sorted { $0.sortOrder < $1.sortOrder }
+            .map { documentJSON($0, includeContent: false) }
+        return ok(["_embedded": ["textDocumentResourceList": items],
+                   "_links": ["self": link("/api/document?projectId=\(projectId)"),
+                              "reorder": link("/api/document/reorder?projectId=\(projectId)")]])
+    }
+
+    /// A song exported on its own. The demo serves the format it can actually
+    /// produce — a PDF shell or the lyric text — so the export rel resolves
+    /// offline; the point is the round trip, not a faithful renderer.
+    private func demoSongExport(_ document: DemoDocument, format: String) -> (Int, Data) {
+        switch format {
+        case "pdf":
+            return (200, minimalPDF(title: document.title))
+        default:
+            let header = document.title.isEmpty ? "" : document.title + "\n\n"
+            return (200, Data((header + document.content).utf8))
         }
     }
 
@@ -801,6 +885,12 @@ actor DemoBackend {
             // to scope. A note is plain text with nothing to vary.
             links["editions"] = link("/api/song/edition?documentId=\(document.id)")
             links["songBlocks"] = link("/api/song/block?documentId=\(document.id)")
+            // A song exports on its own; a note has no song layout, so these are
+            // song-only, matching the server.
+            links["exportSongTxt"] = link("/api/document/\(document.id)/export-song?format=txt")
+            links["exportSongPdf"] = link("/api/document/\(document.id)/export-song?format=pdf")
+            links["exportSongDocx"] = link("/api/document/\(document.id)/export-song?format=docx")
+            links["exportSongEpub"] = link("/api/document/\(document.id)/export-song?format=epub")
         }
         var json: [String: Any] = [
             "id": document.id,
@@ -2167,6 +2257,7 @@ actor DemoBackend {
         ["_links": ["self": link("/api"),
                     "projects": link("/api/project"),
                     "actors": link("/api/actor"),
+                    "capitalizationPreferences": link("/api/preferences/capitalization"),
                     "teams": link("/api/team")]]
     }
 

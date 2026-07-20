@@ -894,6 +894,81 @@ func run() async {
         }
     }
 
+    // --- SONG EXPORT ---
+    //
+    // A song exports on its own, in the formats SongExportService offers. Like
+    // script export, these sit outside the edit gate — a reader can take a copy.
+    // Song-only: a note has no song layout, so it carries none of these links.
+    for rel in ["exportSongTxt", "exportSongPdf", "exportSongDocx", "exportSongEpub"] {
+        check("a song advertises `\(rel)`",
+              (songDoc["_links"] as? [String: Any])?[rel] != nil)
+        check("a note does not advertise `\(rel)`",
+              (noteDoc["_links"] as? [String: Any])?[rel] == nil)
+    }
+    if let href = ((songDoc["_links"] as? [String: Any])?["exportSongTxt"]
+        as? [String: Any])?["href"] as? String, let exportURL = URL(string: href) {
+        let exported = await be.respond(method: "GET", url: exportURL, body: nil)
+        check("following a song export link returns a file",
+              exported.status == 200 && !exported.data.isEmpty, "got \(exported.status)")
+    }
+
+    // --- DOCUMENT REORDER ---
+    //
+    // Reordering reassigns sort order to the ids supplied, so the client can
+    // send just the tab it is dragging in. Advertised on the collection for an
+    // editor.
+    let docCollection = json(await be.respond(
+        method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data)
+    check("the document collection advertises `reorder`",
+          (docCollection["_links"] as? [String: Any])?["reorder"] != nil)
+    if let songId = songDoc["id"] as? Int, let noteId = noteDoc["id"] as? Int {
+        func documentIds() async -> [Int] {
+            embedded(json(await be.respond(
+                method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data))
+                .compactMap { $0["id"] as? Int }
+        }
+        let flipped = embedded(json(await be.respond(
+            method: "POST", url: url("/api/document/reorder?projectId=\(pid)"),
+            body: body(["orderedIds": [noteId, songId]])).data))
+            .compactMap { $0["id"] as? Int }
+        check("reorder lists the note before the song",
+              (flipped.firstIndex(of: noteId) ?? 0) < (flipped.firstIndex(of: songId) ?? 0),
+              "got \(flipped)")
+        _ = await be.respond(method: "POST", url: url("/api/document/reorder?projectId=\(pid)"),
+                             body: body(["orderedIds": [songId, noteId]]))
+        let restored = await documentIds()
+        check("reorder puts the song first again",
+              (restored.firstIndex(of: songId) ?? 0) < (restored.firstIndex(of: noteId) ?? 0),
+              "got \(restored)")
+        check("reorder rejects an unknown id -> 400",
+              await be.respond(method: "POST", url: url("/api/document/reorder?projectId=\(pid)"),
+                               body: body(["orderedIds": [987654]])).status == 400)
+    }
+
+    // --- CAPITALIZATION PREFERENCES ---
+    //
+    // Per-element auto-caps, stored on the server because exports bake the case
+    // in. Advertised on the root; a partial POST changes just the field sent.
+    check("root advertises `capitalizationPreferences`",
+          links(root)["capitalizationPreferences"] != nil)
+    let caps = json(await be.respond(
+        method: "GET", url: url("/api/preferences/capitalization"), body: nil).data)
+    check("preferences default to all-on",
+          ["scene", "character", "transition", "shot"].allSatisfy { caps[$0] as? Bool == true })
+    check("preferences advertise `update`", links(caps)["update"] != nil)
+    let toggled = json(await be.respond(
+        method: "POST", url: url("/api/preferences/capitalization"),
+        body: body(["character": false])).data)
+    check("a partial post turns one element off", toggled["character"] as? Bool == false)
+    check("and leaves the others on",
+          ["scene", "transition", "shot"].allSatisfy { toggled[$0] as? Bool == true })
+    let reread = json(await be.respond(
+        method: "GET", url: url("/api/preferences/capitalization"), body: nil).data)
+    check("the change persists on re-read", reread["character"] as? Bool == false)
+    // Put it back so a re-run starts clean.
+    _ = await be.respond(method: "POST", url: url("/api/preferences/capitalization"),
+                         body: body(["character": true]))
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

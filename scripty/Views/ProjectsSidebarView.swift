@@ -44,6 +44,7 @@ struct ProjectsSidebarView: View {
     /// The API root's `teams` link, present only for a user who may manage
     /// them. Held so the sheet opens from the link, not a bare flag.
     @State private var teamsLink: HALLink?
+    @State private var showingPreferences = false
     @State private var searchText = ""
     @AppStorage("projectListSort") private var sortMode = ProjectSort.lastEdited
 
@@ -172,6 +173,17 @@ struct ProjectsSidebarView: View {
                     }
                 }
             }
+            // Editor preferences (auto-capitalization) — advertised on the root
+            // only for a signed-in account, since they are stored per user.
+            if app.apiRoot?.hasLink(.capitalizationPreferences) == true {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        showingPreferences = true
+                    } label: {
+                        Label("Editor Preferences", systemImage: "textformat")
+                    }
+                }
+            }
             ToolbarItem(placement: .secondaryAction) {
                 Button(role: .destructive) {
                     app.signOut()
@@ -180,6 +192,9 @@ struct ProjectsSidebarView: View {
                           systemImage: "rectangle.portrait.and.arrow.right")
                 }
             }
+        }
+        .sheet(isPresented: $showingPreferences) {
+            CapitalizationSettingsView(app: app)
         }
         .sheet(item: $trashLink) { link in
             TrashView<TrashedProject, TrashedProjectRow>(

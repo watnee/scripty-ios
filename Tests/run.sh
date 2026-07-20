@@ -67,6 +67,7 @@ swiftc -o "$BUILD/unsaved" \
     "$SRC/State/AppModel.swift" \
     "$SRC/State/ScriptModel.swift" \
     "$SRC/State/PresentationSettings.swift" \
+    "$SRC/State/CapitalizationSettings.swift" \
     "$SRC/Models/"*.swift \
     "${SHARED[@]}" \
     "$ROOT/Tests/UnsavedWork/main.swift"

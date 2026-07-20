@@ -22,6 +22,8 @@ struct SongsView: View {
     @State private var renameTitle = ""
     @State private var sharingDocument: TextDocument?
     @State private var shareEmail = ""
+    /// The finished song export, waiting for the system share sheet.
+    @State private var exportedSong: ExportedSong?
     @State private var showingImporter = false
     /// Presented from the link the document collection advertised.
     @State private var trashLink: HALLink?
@@ -41,6 +43,14 @@ struct SongsView: View {
             List {
                 ForEach(shown) { document in
                     row(for: document)
+                }
+                .onMove { source, destination in
+                    // Edit mode is only reachable when reordering is allowed
+                    // (the toolbar gates its button on the same rule), so this
+                    // is guarded rather than conditionally attached — a plain
+                    // closure keeps the list's content type unambiguous.
+                    guard model.canReorderDocuments else { return }
+                    moveDocuments(from: source, to: destination)
                 }
             }
             .overlay { emptyState }
@@ -68,6 +78,9 @@ struct SongsView: View {
             }
             .sheet(item: $creatingType) { type in
                 SongEditorView(model: model, document: nil, type: type)
+            }
+            .sheet(item: $exportedSong) { export in
+                ShareSheet(items: [export.url])
             }
             .sheet(item: $editingDocument) { document in
                 // A song is lyric lines on the server, so it opens the line
@@ -160,6 +173,16 @@ struct SongsView: View {
                     Label("Email…", systemImage: "envelope")
                 }
             }
+            let exports = model.songExportOptions(for: document)
+            if !exports.isEmpty {
+                Menu {
+                    ForEach(exports) { option in
+                        Button(option.label) { exportSong(document, option) }
+                    }
+                } label: {
+                    Label("Export…", systemImage: "square.and.arrow.up")
+                }
+            }
             if document.hasLink(.delete) {
                 Button(role: .destructive) {
                     Task { await model.deleteDocument(document) }
@@ -201,6 +224,13 @@ struct SongsView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Done") { dismiss() }
+        }
+        // Only worth entering edit mode when there is an order to change and
+        // more than one item to move.
+        if model.canReorderDocuments && shown.count > 1 {
+            ToolbarItem(placement: .primaryAction) {
+                EditButton()
+            }
         }
         if canEdit {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -254,6 +284,23 @@ struct SongsView: View {
         renamingDocument = nil
         guard !title.isEmpty else { return }
         Task { await model.renameDocument(document, title: title) }
+    }
+
+    private func moveDocuments(from source: IndexSet, to destination: Int) {
+        var reordered = shown
+        reordered.move(fromOffsets: source, toOffset: destination)
+        Task { await model.reorderDocuments(reordered) }
+    }
+
+    private func exportSong(_ document: TextDocument, _ option: ScriptModel.ExportOption) {
+        Task {
+            do {
+                let url = try await model.downloadExport(option, named: document.displayTitle)
+                exportedSong = ExportedSong(url: url)
+            } catch {
+                statusMessage = "Could not export \"\(document.displayTitle)\"."
+            }
+        }
     }
 
     private func commitShare() {
@@ -316,6 +363,13 @@ struct SongsView: View {
 /// `sheet(item:)` needs an Identifiable selection for the create flow.
 extension DocumentType: Identifiable {
     var id: String { rawValue }
+}
+
+/// A downloaded song file, presented to the share sheet by identity so the
+/// sheet opens only once the export has actually landed on disk.
+private struct ExportedSong: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }
 
 private extension URL {
