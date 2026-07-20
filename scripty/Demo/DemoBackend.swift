@@ -100,6 +100,11 @@ actor DemoBackend {
     private var nextDeletedBlockId = 1
     private var redoStacks: [Int: [[DemoBlock]]] = [:]
     private var defaultProjectId: Int?
+    /// Auto-capitalization for the demo user, starting at the historic
+    /// all-on behaviour the server also defaults to.
+    private var capitalization: [String: Bool] = [
+        "scene": true, "character": true, "transition": true, "shot": true,
+    ]
     private var nextProjectId = 1
     private var nextBlockId = 1
     private var nextPersonId = 1
@@ -125,6 +130,8 @@ actor DemoBackend {
         case ("GET", "api", nil):
             return ok(rootJSON())
 
+        case (_, "api", "preferences"):
+            return routePreferences(method: method, fields: fields)
         case (_, "api", "project"):
             return routeProject(method: method, path: Array(path.dropFirst(2)),
                                 query: query, fields: fields, body: body)
@@ -1972,10 +1979,30 @@ actor DemoBackend {
 
     // MARK: - Resource JSON
 
+    // MARK: - Preferences
+
+    /// Auto-capitalization, stored for the one demo user. Partial updates, as
+    /// on the server: a field left out keeps its value, so a single toggle
+    /// posts only the type that changed.
+    private func routePreferences(method: String, fields: [String: Any]) -> (Int, Data) {
+        if method == "POST" {
+            for key in ["scene", "character", "transition", "shot"] {
+                if let value = fields[key] as? Bool { capitalization[key] = value }
+            }
+        }
+        var json = capitalization as [String: Any]
+        json["_links"] = [
+            "self": link("/api/preferences/capitalization"),
+            "update": link("/api/preferences/capitalization"),
+        ]
+        return ok(json)
+    }
+
     private func rootJSON() -> [String: Any] {
         ["_links": ["self": link("/api"),
                     "projects": link("/api/project"),
-                    "actors": link("/api/actor")]]
+                    "actors": link("/api/actor"),
+                    "capitalizationPreferences": link("/api/preferences/capitalization")]]
     }
 
     private func projectJSON(_ project: DemoProject) -> [String: Any] {

@@ -21,6 +21,8 @@ struct Rel: RawRepresentable, Hashable, Sendable {
 
     static let selfRel = Rel("self")
     static let users = Rel("users")
+    /// Per-user auto-capitalization, advertised on the API root.
+    static let capitalizationPreferences = Rel("capitalizationPreferences")
     static let projects = Rel("projects")
     static let importProject = Rel("importProject")
     static let blocks = Rel("blocks")

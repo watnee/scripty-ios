@@ -87,6 +87,10 @@ struct ScriptView: View {
             await model.refreshUndoRedo()
         }
         .task {
+            // Loaded before the blocks so the first element a writer touches
+            // already knows whether it types in capitals. `load()` is a no-op
+            // once it has answered, so opening a second script costs nothing.
+            await model.app.capitalization.load()
             await model.loadEverything()
             model.startSyncPolling()
             repaginate()

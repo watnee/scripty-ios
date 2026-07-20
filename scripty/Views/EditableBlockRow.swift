@@ -207,11 +207,13 @@ struct EditableBlockRow: View {
         return base * textScale
     }
 
+    /// Capitals for the types the writer has asked for, sentence case for the
+    /// rest. The preference is the writer's, not this device's, because the
+    /// exporters bake the case into the file.
     private var capitalization: UITextAutocapitalizationType {
-        switch block.blockType {
-        case .scene, .character, .dualDialogue, .transition, .shot: return .allCharacters
-        default: return .sentences
-        }
+        model.app.capitalization.preferences.applies(to: block.blockType)
+            ? .allCharacters
+            : .sentences
     }
 
     private var uiFont: UIFont {
