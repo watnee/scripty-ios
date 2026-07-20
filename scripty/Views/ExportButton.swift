@@ -17,7 +17,8 @@ struct ExportButton: View {
     @State private var isExporting = false
     @State private var errorMessage: String?
 
-    private struct ExportedFile: Identifiable {
+    /// Also used by ScriptView, which runs the ⌘⇧1–⌘⇧4 exports itself.
+    struct ExportedFile: Identifiable {
         let url: URL
         var id: String { url.absoluteString }
     }
@@ -67,7 +68,8 @@ struct ExportButton: View {
     }
 }
 
-private struct ShareSheet: UIViewControllerRepresentable {
+/// Shared with ScriptView, which presents the same sheet for a keyboard export.
+struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

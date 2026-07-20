@@ -13,12 +13,29 @@ import SwiftUI
 struct ScriptView: View {
     @State private var model: ScriptModel
     @State private var showingCharacters = false
-    @State private var showingSongs = false
     @State private var showingTitlePage = false
-    @State private var showingOutline = false
+    /// The outline sheet, presented *by* the list it should open on — ⌘⇧C,
+    /// ⌘⇧A and ⌘⇧M each name a different one. Deliberately `.sheet(item:)`
+    /// rather than a bool plus a separate tab: with `isPresented` the content
+    /// closure is built from the body snapshot taken before the tab change
+    /// propagates, so every shortcut opened the sheet on whichever list it was
+    /// showing last.
+    @State private var outlineSheet: ScriptOutlineView.Tab?
+    /// Songs & Notes, presented by its list for the same reason (⌘⇧S / ⌘⇧D).
+    @State private var songsSheet: DocumentType?
     @State private var showingStats = false
+    @State private var showingShortcuts = false
     @State private var isSearching = false
     @State private var showingRead = false
+    /// Raised by ⌘⇧I and read by the import button's picker binding.
+    @State private var importRequest = false
+    /// A keyboard export in flight, and its finished file.
+    ///
+    /// Run here rather than by the export menu itself: that lives in a
+    /// `ToolbarItemGroup`, where an `.onChange` is not reliably evaluated, so
+    /// a trigger handed to it was simply never seen. The menu keeps its own
+    /// copy of this flow for taps; this is the keyboard's way in.
+    @State private var exportedFile: ExportButton.ExportedFile?
     @State private var showingPageSetup = false
     @State private var showingVersions = false
     /// Presented from the link the block collection advertised.
@@ -57,6 +74,10 @@ struct ScriptView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { editionBanner }
+        // Behind the page rather than in the toolbar: a shortcut has to keep
+        // working when the control it mirrors is hidden by focus mode or
+        // dropped at phone width.
+        .background { ScriptShortcutLayer(isEnabled: isEnabled, perform: perform) }
         .navigationTitle(model.project.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -140,16 +161,22 @@ struct ScriptView: View {
         .sheet(isPresented: $showingCharacters) {
             CharactersView(model: model)
         }
-        .sheet(isPresented: $showingSongs) {
-            SongsView(model: model)
+        .sheet(item: $songsSheet) { listType in
+            SongsView(model: model, listType: listType)
+        }
+        .sheet(isPresented: $showingShortcuts) {
+            ShortcutsReferenceView(isEnabled: isEnabled)
+        }
+        .sheet(item: $exportedFile) { file in
+            ShareSheet(items: [file.url])
         }
         .sheet(isPresented: $showingTitlePage) {
             TitlePageView(app: model.app, project: model.project) { updated in
                 model.adopt(updated)
             }
         }
-        .sheet(isPresented: $showingOutline) {
-            ScriptOutlineView(model: model, navigator: navigator)
+        .sheet(item: $outlineSheet) { tab in
+            ScriptOutlineView(model: model, navigator: navigator, tab: tab)
         }
         .sheet(isPresented: $showingStats) {
             ScriptStatsView(model: model)
@@ -159,6 +186,146 @@ struct ScriptView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    /// The element the caret is in, which is what the format, element-type and
+    /// reordering shortcuts act on. Nil while nothing is focused — the same
+    /// rule the web app applies, where those keys need "an active block".
+    private var focusedBlock: Block? {
+        guard let id = model.focusedBlockId else { return nil }
+        return model.blocks.first { $0.id == id }
+    }
+
+    /// Whether the page can act on a shortcut right now.
+    ///
+    /// Shared with the reference sheet, so what is greyed out there is exactly
+    /// what is inert here — and doing the gating once means a shortcut cannot
+    /// be listed as working while quietly doing nothing.
+    private func isEnabled(_ action: ScriptShortcutAction) -> Bool {
+        switch action {
+        case .undo: return model.undoRedo?.canUndo ?? false
+        case .redo: return model.undoRedo?.canRedo ?? false
+
+        case .search, .findReplace:
+            return model.hasScriptContent
+        case .nextMatch, .previousMatch:
+            return isSearching && search.hasMatches
+        case .focusMode, .pageView:
+            return true
+        case .readScript:
+            return model.hasScriptContent
+        case .outline(let tab):
+            // Songs and characters have their own sheets elsewhere, but every
+            // outline tab is derived from the blocks we already hold.
+            return tab == .outline ? true : model.hasScriptContent
+        case .documents:
+            return model.canViewDocuments
+        case .shortcutsReference:
+            return true
+
+        case .titlePage:
+            return !settings.isFocusMode
+        case .versionHistory:
+            return model.project.hasLink(.versions)
+        case .importFile:
+            // The button that owns the picker is in the overflow menu, which
+            // focus mode clears out along with everything else.
+            return model.project.hasLink(.importScript) && !settings.isFocusMode
+        case .export(let rel):
+            return model.exportOptions.contains { $0.rel == rel } && !settings.isFocusMode
+
+        case .biggerText: return settings.canIncreaseTextSize
+        case .smallerText: return settings.canDecreaseTextSize
+
+        case .bold, .italic, .underline, .align:
+            return focusedBlock?.hasLink(.update) ?? false
+        case .setType:
+            return focusedBlock?.hasLink(.setType) ?? false
+        case .moveUp:
+            return focusedBlock.map { model.canMoveUp($0) } ?? false
+        case .moveDown:
+            return focusedBlock.map { model.canMoveDown($0) } ?? false
+        }
+    }
+
+    private func perform(_ action: ScriptShortcutAction) {
+        switch action {
+        case .undo: Task { await model.undo() }
+        case .redo: Task { await model.redo() }
+
+        case .search:
+            isSearching = true
+        case .findReplace:
+            isSearching = true
+            search.isReplacing = true
+        case .nextMatch:
+            if let match = search.next() { navigator.jump(to: match.blockId) }
+        case .previousMatch:
+            if let match = search.previous() { navigator.jump(to: match.blockId) }
+
+        case .focusMode: settings.isFocusMode.toggle()
+        case .pageView: settings.isPageView.toggle()
+        case .readScript: showingRead = true
+        case .outline(let tab):
+            outlineSheet = tab
+        case .documents(let kind):
+            songsSheet = kind
+        case .shortcutsReference:
+            showingShortcuts = true
+
+        case .titlePage: showingTitlePage = true
+        case .versionHistory: showingVersions = true
+        case .importFile: importRequest = true
+        case .export(let rel): exportFromKeyboard(rel)
+
+        case .biggerText: settings.increaseTextSize()
+        case .smallerText: settings.decreaseTextSize()
+
+        // Formatting and retyping act on the focused element and leave the
+        // caret where it was, so a writer can bold a word mid-sentence and
+        // keep typing — the reason these are worth having on the keyboard.
+        case .bold:
+            withFocusedBlock { await model.toggleBold($0) }
+        case .italic:
+            withFocusedBlock { await model.toggleItalic($0) }
+        case .underline:
+            withFocusedBlock { await model.toggleUnderline($0) }
+        case .align(let align):
+            withFocusedBlock { await model.setAlign($0, to: align) }
+        case .setType(let type):
+            withFocusedBlock { await model.changeType($0, to: type) }
+        case .moveUp:
+            withFocusedBlock { await model.moveBlockUp($0) }
+        case .moveDown:
+            withFocusedBlock { await model.moveBlockDown($0) }
+        }
+    }
+
+    /// Downloads one export format and hands the file to a share sheet — the
+    /// same thing tapping the format in the export menu does.
+    private func exportFromKeyboard(_ rel: Rel) {
+        guard let option = model.exportOptions.first(where: { $0.rel == rel }) else { return }
+        Task {
+            do {
+                exportedFile = ExportButton.ExportedFile(url: try await model.export(option))
+            } catch {
+                // Reported through the page's own error alert rather than a
+                // second one: a view may carry only one `.alert`, and adding
+                // another silently stopped every sheet on this page from
+                // presenting at all — including from the toolbar.
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Runs `body` against whatever holds the caret, or does nothing. Read at
+    /// the moment the key is pressed rather than captured earlier, since focus
+    /// moves while a shortcut's own work is still in flight.
+    private func withFocusedBlock(_ body: @escaping (Block) async -> Void) {
+        guard let block = focusedBlock else { return }
+        Task { await body(block) }
     }
 
     /// Says which edition is open, but only when it is not the default one.
@@ -408,14 +575,12 @@ struct ScriptView: View {
                 } label: {
                     Label("Search", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("f", modifiers: .command)
 
                 Button {
-                    showingOutline = true
+                    outlineSheet = .outline
                 } label: {
                     Label("Outline", systemImage: "list.bullet.indent")
                 }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
 
                 if model.canSelectBlocks && !settings.isPageView {
                     Button {
@@ -436,7 +601,7 @@ struct ScriptView: View {
 
             if model.canViewDocuments && !settings.isFocusMode {
                 Button {
-                    showingSongs = true
+                    songsSheet = .song
                 } label: {
                     Label("Songs & Notes", systemImage: "music.note.list")
                 }
@@ -509,7 +674,8 @@ struct ScriptView: View {
                     }
                 }
 
-                ScriptImportButton(app: model.app, project: model.project) { updated in
+                ScriptImportButton(app: model.app, project: model.project,
+                                   trigger: $importRequest) { updated in
                     model.adopt(updated)
                     await model.loadBlocks()
                     await model.refreshUndoRedo()
@@ -544,12 +710,10 @@ struct ScriptView: View {
                 Toggle(isOn: pageViewBinding) {
                     Label("Page View", systemImage: "doc.richtext")
                 }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
 
                 Toggle(isOn: focusModeBinding) {
                     Label("Focus Mode", systemImage: "moon")
                 }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
 
                 Button {
                     showingRead = true
@@ -566,7 +730,6 @@ struct ScriptView: View {
                     Label("Bigger", systemImage: "textformat.size.larger")
                 }
                 .disabled(!settings.canIncreaseTextSize)
-                .keyboardShortcut("+", modifiers: .command)
 
                 Button {
                     settings.decreaseTextSize()
@@ -574,7 +737,6 @@ struct ScriptView: View {
                     Label("Smaller", systemImage: "textformat.size.smaller")
                 }
                 .disabled(!settings.canDecreaseTextSize)
-                .keyboardShortcut("-", modifiers: .command)
 
                 Button {
                     settings.resetTextSize()
@@ -589,6 +751,14 @@ struct ScriptView: View {
                     showingPageSetup = true
                 } label: {
                     Label("Page Setup…", systemImage: "ruler")
+                }
+
+                // The shortcuts have their own shortcut, but a writer who does
+                // not know the shortcuts cannot be expected to know that one.
+                Button {
+                    showingShortcuts = true
+                } label: {
+                    Label("Keyboard Shortcuts", systemImage: "keyboard")
                 }
             }
         } label: {

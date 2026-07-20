@@ -15,7 +15,15 @@ struct SongsView: View {
     let model: ScriptModel
 
     @Environment(\.dismiss) private var dismiss
-    @State private var listType: DocumentType = .song
+    @State private var listType: DocumentType
+
+    /// Opens on `listType`, so ⌘⇧S and ⌘⇧D reach songs and notes directly the
+    /// way the web app's two menu entries do.
+    init(model: ScriptModel, listType: DocumentType = .song) {
+        self.model = model
+        _listType = State(initialValue: listType)
+    }
+
     @State private var editingDocument: TextDocument?
     @State private var creatingType: DocumentType?
     @State private var renamingDocument: TextDocument?

@@ -36,6 +36,9 @@ struct BlockTextView: UIViewRepresentable {
         view.onShiftTab = { [weak coordinator = context.coordinator] in
             coordinator?.tab(backward: true)
         }
+        view.onMove = { [weak coordinator = context.coordinator] up in
+            coordinator?.move(up: up)
+        }
         context.coordinator.textView = view
         apply(font: font, alignment: alignment, capitalize: autocapitalize, to: view)
         return view
@@ -195,6 +198,21 @@ struct BlockTextView: UIViewRepresentable {
             Task { await model.cycleType(block, backward: backward) }
         }
 
+        /// Reorder this element. The move renumbers the script and reloads it,
+        /// which takes focus away — deliberately, and the same as tapping the
+        /// element menu: after a move the writer is looking at where the line
+        /// landed, not typing into it.
+        func move(up: Bool) {
+            let block = block
+            Task {
+                if up {
+                    await model.moveBlockUp(block)
+                } else {
+                    await model.moveBlockDown(block)
+                }
+            }
+        }
+
         func applyCaret(_ characterOffset: Int) {
             guard let textView else { return }
             let string = textView.text ?? ""
@@ -217,12 +235,21 @@ struct BlockTextView: UIViewRepresentable {
     }
 }
 
-/// A UITextView that reports a Backspace pressed with the caret at the very
-/// start (nothing to delete) and Shift-Tab, both of which have no plain-text
-/// representation to catch in the delegate.
+/// A UITextView that reports the keys with no plain-text representation to
+/// catch in the delegate: Backspace pressed with the caret at the very start
+/// (nothing to delete), Shift-Tab, and ⌥↑/⌥↓ to reorder.
+///
+/// Reordering has to be declared here rather than as a SwiftUI
+/// `.keyboardShortcut` further up the view. Those are only consulted once the
+/// first responder declines the key, and a text view declines none of the
+/// modifier+arrow combinations — it reads ⌥↑ as "caret to the top of the
+/// paragraph" and ⌃⇧↑ as "extend the selection upward". A `UIKeyCommand`
+/// declared on the text view outranks its own built-in bindings, so this is
+/// the only level at which the shortcut can win.
 final class BlockUITextView: UITextView {
     var onDeleteBackwardAtStart: (() -> Void)?
     var onShiftTab: (() -> Void)?
+    var onMove: ((_ up: Bool) -> Void)?
 
     override func deleteBackward() {
         if selectedRange.location == 0, selectedRange.length == 0 {
@@ -238,5 +265,33 @@ final class BlockUITextView: UITextView {
 
     @objc private func handleShiftTab() {
         onShiftTab?()
+    }
+
+    /// Claims ⌥↑ / ⌥↓ before the text system sees them.
+    ///
+    /// A `UIKeyCommand` is not enough for arrow keys: the text-input responder
+    /// handles those ahead of `keyCommands`, so declaring them there left ⌥↑
+    /// still moving the caret to the top of the paragraph. `pressesBegan` runs
+    /// before either, and swallowing the press by not calling `super` is what
+    /// stops the caret from moving as well.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            guard let key = press.key else { continue }
+            // Option and nothing else: ⌥⇧↑ is a selection gesture the text
+            // view should keep, and ⌘↑ jumps to the top of the document.
+            let modifiers = key.modifierFlags.intersection([.alternate, .command, .control, .shift])
+            guard modifiers == .alternate else { continue }
+            switch key.keyCode {
+            case .keyboardUpArrow:
+                onMove?(true)
+                return
+            case .keyboardDownArrow:
+                onMove?(false)
+                return
+            default:
+                continue
+            }
+        }
+        super.pressesBegan(presses, with: event)
     }
 }
