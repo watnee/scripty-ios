@@ -2,10 +2,14 @@
 //  VersionHistoryView.swift
 //  scripty
 //
-//  The script's saved snapshots, newest first. Named versions and automatic
-//  saves are separated, because a history where the four snapshots the writer
+//  Saved snapshots, newest first. Named versions and automatic saves are
+//  separated, because a history where the four snapshots the writer
 //  deliberately marked are buried among a hundred autosaves is not much of a
 //  history.
+//
+//  Serves a screenplay and a song alike; `subject` is the only word that
+//  changes, and calling a song "the script" would be the one place the shared
+//  view showed through.
 //
 
 import SwiftUI
@@ -21,8 +25,17 @@ struct VersionHistoryView: View {
     @State private var newLabel = ""
     @State private var pendingRestore: ProjectVersion?
 
-    init(app: AppModel, project: Project, onRestored: @escaping () async -> Void) {
-        _model = State(initialValue: VersionHistoryModel(app: app, project: project))
+    /// What this is a history of, as the writer would say it: "script", "song".
+    let subject: String
+
+    init(
+        app: AppModel,
+        source: HALLink,
+        subject: String = "script",
+        onRestored: @escaping () async -> Void
+    ) {
+        _model = State(initialValue: VersionHistoryModel(app: app, source: source))
+        self.subject = subject
         self.onRestored = onRestored
     }
 
@@ -40,7 +53,7 @@ struct VersionHistoryView: View {
                     } header: {
                         Text("Autosaves")
                     } footer: {
-                        Text("Saved automatically as the script changes.")
+                        Text("Saved automatically as the \(subject) changes.")
                     }
                 }
             }
@@ -75,7 +88,7 @@ struct VersionHistoryView: View {
                     Task { await model.createVersion(label: label) }
                 }
             } message: {
-                Text("Saves the script as it stands now.")
+                Text("Saves the \(subject) as it stands now.")
             }
             .alert("Restore Version", isPresented: restoreBinding) {
                 Button("Cancel", role: .cancel) { pendingRestore = nil }
@@ -88,7 +101,7 @@ struct VersionHistoryView: View {
                     }
                 }
             } message: {
-                Text("Replace the current script with “\(pendingRestore?.displayLabel ?? "")”? "
+                Text("Replace the current \(subject) with “\(pendingRestore?.displayLabel ?? "")”? "
                      + "The current state is saved first, so this can be undone.")
             }
             .alert("Error", isPresented: errorBinding) {
@@ -165,6 +178,11 @@ struct VersionHistoryView: View {
             }
             if summary.projectMetadataChanged ?? false {
                 Text("title page")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if summary.titleChanged ?? false {
+                Text("title")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

@@ -46,6 +46,11 @@ final class SongBlockModel {
 
     var canAddLine: Bool { links.contains(.create) }
 
+    /// The song's snapshot history, when the server keeps one. Advertised on
+    /// the line collection rather than on the document, so it is only known
+    /// once the lyric has loaded.
+    var versionsLink: HALLink? { links[.versions] }
+
     init(app: AppModel, document: TextDocument) {
         self.app = app
         self.document = document

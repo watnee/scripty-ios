@@ -28,8 +28,9 @@ struct ShareView: View {
     @State private var sentNotice: String?
     @FocusState private var emailFocused: Bool
 
-    init(app: AppModel, source: HALLink, projectTitle: String) {
-        _model = State(initialValue: InvitationsModel(app: app, source: source))
+    init(app: AppModel, source: HALLink, contactsSource: HALLink? = nil, projectTitle: String) {
+        _model = State(initialValue: InvitationsModel(
+            app: app, source: source, contactsSource: contactsSource))
         self.projectTitle = projectTitle
     }
 
@@ -106,6 +107,33 @@ struct ShareView: View {
                 .keyboardType(.emailAddress)
                 #endif
                 .focused($emailFocused)
+                .onChange(of: draftEmail) { _, text in
+                    if model.canSuggest { model.suggestContacts(matching: text) }
+                }
+
+            // Names the project already knows, filled in on a tap. Only shown
+            // while the field has focus, so a chosen address is not second-
+            // guessed by the list reappearing under it.
+            if emailFocused {
+                ForEach(model.suggestions) { suggestion in
+                    Button {
+                        pick(suggestion)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(suggestion.displayName)
+                                .foregroundStyle(.primary)
+                            HStack(spacing: 6) {
+                                Text(suggestion.email)
+                                if let source = suggestion.sourceLabel, !source.isEmpty {
+                                    Text("· \(source)")
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
 
             Picker("Access", selection: $inviteAsReader) {
                 Text("Can edit").tag(false)
@@ -161,11 +189,20 @@ struct ShareView: View {
         }
     }
 
+    /// Fills the field from a suggestion and puts the list away, leaving the
+    /// send to a deliberate second tap.
+    private func pick(_ suggestion: ContactSuggestion) {
+        draftEmail = suggestion.email
+        model.clearSuggestions()
+        emailFocused = false
+    }
+
     private func send() {
         let email = draftEmail
         let asReader = inviteAsReader
         draftEmail = ""
         emailFocused = false
+        model.clearSuggestions()
         Task {
             if await model.invite(email, viewOnly: asReader) {
                 sentNotice = "Invitation sent to \(email)."

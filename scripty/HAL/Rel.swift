@@ -54,6 +54,11 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let exportPdf = Rel("exportPdf")
     static let exportDocx = Rel("exportDocx")
     static let exportFdx = Rel("exportFdx")
+    static let exportEpub = Rel("exportEpub")
+
+    /// The whole project as a `.scripty.json` bundle — the format `importProject`
+    /// reads back, so this is the round trip that moves a project between servers.
+    static let exportArchive = Rel("exportArchive")
     static let headshot = Rel("headshot")
     static let documents = Rel("documents")
     static let document = Rel("document")
@@ -79,6 +84,16 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let invitations = Rel("invitations")
     static let sendInvitation = Rel("sendInvitation")
     static let revoke = Rel("revoke")
+
+    /// Names known to this project, offered while typing an invite address so
+    /// the sender need not remember the email. Scoped to the project, so it is
+    /// not a directory of everyone.
+    static let contactSuggestions = Rel("contact-suggestions")
+
+    // Teams — a production's people, managed by an admin. The `teams` rel is
+    // declared above; it is advertised on the API root only when the signed-in
+    // user may see them.
+    static let assignProductions = Rel("assignProductions")
 
     // A song's lyric, stored as ordered lines like a screenplay's elements.
     static let songBlocks = Rel("songBlocks")

@@ -18,6 +18,9 @@ import Observation
 final class InvitationsModel {
     private let app: AppModel
     private let source: HALLink
+    /// The project's `contact-suggestions` link, when it advertised one. Nil
+    /// simply means no autofill — the invite field still works by hand.
+    private let contactsSource: HALLink?
 
     private(set) var invitations: [Invitation] = []
     private(set) var links = HALLinks()
@@ -25,14 +28,19 @@ final class InvitationsModel {
     private(set) var isWorking = false
     var errorMessage: String?
 
+    private(set) var suggestions: [ContactSuggestion] = []
+    private var suggestTask: Task<Void, Never>?
+
     var canInvite: Bool { links.contains(.sendInvitation) }
+    var canSuggest: Bool { contactsSource != nil }
 
     var collaborators: [Invitation] { invitations.filter { !$0.isViewOnly } }
     var readers: [Invitation] { invitations.filter(\.isViewOnly) }
 
-    init(app: AppModel, source: HALLink) {
+    init(app: AppModel, source: HALLink, contactsSource: HALLink? = nil) {
         self.app = app
         self.source = source
+        self.contactsSource = contactsSource
     }
 
     func load() async {
@@ -56,6 +64,37 @@ final class InvitationsModel {
         guard !trimmed.isEmpty else { return false }
         return await act(link, method: "POST",
                          body: SendInvitationCommand(email: trimmed, teamId: nil, viewOnly: viewOnly))
+    }
+
+    /// Looks up contacts matching what has been typed so far, debounced so a
+    /// fast typist does not fire a request per keystroke. An empty query clears
+    /// the list rather than asking the server for everyone.
+    func suggestContacts(matching query: String) {
+        suggestTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let contactsSource, trimmed.count >= 2 else {
+            suggestions = []
+            return
+        }
+        suggestTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let link = contactsSource.addingQuery(["q": trimmed])
+            do {
+                let collection: HALCollection<ContactSuggestion> = try await app.client.fetch(from: link)
+                guard !Task.isCancelled else { return }
+                suggestions = collection.items
+            } catch {
+                // Autofill is a convenience; a failed lookup just offers nothing
+                // rather than interrupting the writer with an error.
+                suggestions = []
+            }
+        }
+    }
+
+    func clearSuggestions() {
+        suggestTask?.cancel()
+        suggestions = []
     }
 
     @discardableResult

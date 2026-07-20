@@ -19,6 +19,7 @@ struct SongBlockEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedLine: Int?
     @State private var showingEditions = false
+    @State private var showingVersions = false
 
     init(app: AppModel, document: TextDocument) {
         _model = State(initialValue: SongBlockModel(app: app, document: document))
@@ -56,6 +57,15 @@ struct SongBlockEditorView: View {
                     // Flush anything half-typed before the lyric is replaced.
                     await model.commitAll()
                     model.editionBlocksLink = editions.blocksLink(for: edition)
+                }
+            }
+            .sheet(isPresented: $showingVersions) {
+                if let versions = model.versionsLink {
+                    VersionHistoryView(app: model.app, source: versions, subject: "song") {
+                        // A restore rewrites the lyric, so reload rather than
+                        // trusting the lines on screen.
+                        await model.load()
+                    }
                 }
             }
             .alert("Error", isPresented: errorBinding) {
@@ -222,6 +232,13 @@ struct SongBlockEditorView: View {
                     showingEditions = true
                 } label: {
                     Label("Editions", systemImage: "doc.on.doc")
+                }
+            }
+            if model.versionsLink != nil {
+                Button {
+                    showingVersions = true
+                } label: {
+                    Label("Version History", systemImage: "clock.arrow.circlepath")
                 }
             }
             if model.canAddLine {

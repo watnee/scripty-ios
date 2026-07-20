@@ -30,6 +30,7 @@ struct ScriptView: View {
     /// Only present when the server has invitations over the API turned on.
     @State private var shareLink: HALLink?
     @State private var editions: EditionsModel
+    @State private var exporter: ScriptExportModel
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
     @State private var selection = BlockSelectionModel()
@@ -44,8 +45,10 @@ struct ScriptView: View {
     @State private var currentPage = 1
 
     init(app: AppModel, project: Project) {
-        _model = State(initialValue: ScriptModel(app: app, project: project))
+        let model = ScriptModel(app: app, project: project)
+        _model = State(initialValue: model)
         _editions = State(initialValue: EditionsModel(app: app, project: project))
+        _exporter = State(initialValue: ScriptExportModel(model: model))
     }
 
     var body: some View {
@@ -65,6 +68,8 @@ struct ScriptView: View {
         .navigationTitle(model.project.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .exportPresentation(exporter)
+        .focusedSceneValue(\.scriptActions, menuActions)
         .refreshable {
             await model.loadBlocks()
             await model.refreshUndoRedo()
@@ -115,6 +120,7 @@ struct ScriptView: View {
         }
         .sheet(item: $shareLink) { link in
             ShareView(app: model.app, source: link,
+                      contactsSource: model.project.link(.contactSuggestions),
                       projectTitle: model.project.displayTitle)
         }
         .sheet(item: $commentTarget) { block in
@@ -134,12 +140,16 @@ struct ScriptView: View {
             }
         }
         .sheet(isPresented: $showingVersions) {
-            VersionHistoryView(app: model.app, project: model.project) {
-                // A restore rewrites the script, so reload rather than trusting
-                // what is on screen.
-                await model.loadBlocks()
-                await model.refreshUndoRedo()
-                repaginate()
+            // Presented from the link the project advertised, so the sheet
+            // cannot open for a project the server keeps no history for.
+            if let versions = model.project.link(.versions) {
+                VersionHistoryView(app: model.app, source: versions, subject: "script") {
+                    // A restore rewrites the script, so reload rather than
+                    // trusting what is on screen.
+                    await model.loadBlocks()
+                    await model.refreshUndoRedo()
+                    repaginate()
+                }
             }
         }
         .sheet(isPresented: $showingCharacters) {
@@ -429,6 +439,49 @@ struct ScriptView: View {
         }
     }
 
+    /// What this script offers the menu bar.
+    ///
+    /// Gated the same way the toolbar is: an action is nil when the server
+    /// never advertised the link behind it, or when there is no script yet to
+    /// act on, and the menu item goes grey rather than failing on click.
+    private var menuActions: ScriptActions {
+        var actions = ScriptActions(title: model.project.displayTitle)
+
+        actions.canUndo = model.undoRedo?.canUndo ?? false
+        actions.canRedo = model.undoRedo?.canRedo ?? false
+        actions.undo = { Task { await model.undo() } }
+        actions.redo = { Task { await model.redo() } }
+
+        actions.addElement = { Task { await model.appendBlock() } }
+        actions.titlePage = { showingTitlePage = true }
+        actions.pageSetup = { showingPageSetup = true }
+        actions.exporter = model.exportOptions.isEmpty ? nil : exporter
+
+        if let focused = model.blocks.first(where: { $0.id == model.focusedBlockId }) {
+            actions.focusedType = focused.blockType
+            if focused.isEditable {
+                actions.setType = { type in
+                    Task { await model.changeType(focused, to: type) }
+                }
+            }
+        }
+
+        if model.hasScriptContent {
+            actions.find = {
+                isSearching = true
+            }
+            actions.outline = { showingOutline = true }
+            actions.stats = { showingStats = true }
+            actions.readScript = { showingRead = true }
+        }
+
+        if model.project.hasLink(.versions) {
+            actions.versions = { showingVersions = true }
+        }
+
+        return actions
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
@@ -485,7 +538,7 @@ struct ScriptView: View {
             }
 
             if !model.exportOptions.isEmpty && !settings.isFocusMode {
-                ExportButton(model: model)
+                ExportButton(exporter: exporter)
             }
         }
 

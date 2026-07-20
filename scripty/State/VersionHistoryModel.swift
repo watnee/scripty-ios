@@ -2,13 +2,17 @@
 //  VersionHistoryModel.swift
 //  scripty
 //
-//  A project's saved snapshots: list them, name a new one, restore an old one,
-//  delete the ones that stopped mattering.
+//  Saved snapshots: list them, name a new one, restore an old one, delete the
+//  ones that stopped mattering.
 //
 //  The server has offered all of this over REST since before the iPad client
 //  existed; nothing here needed a new endpoint. Restoring answers with the
-//  refreshed history, and the caller reloads the script itself — a restore
-//  rewrites the blocks out from under whatever is on screen.
+//  refreshed history, and the caller reloads the content itself — a restore
+//  rewrites what is on screen out from under the reader.
+//
+//  Scripts and songs both keep a history, and the two work identically: the
+//  model is handed the `versions` link its owner advertised and never learns
+//  which kind of thing it is a history of.
 //
 
 import Foundation
@@ -18,7 +22,8 @@ import Observation
 @MainActor
 final class VersionHistoryModel {
     private let app: AppModel
-    private let project: Project
+    /// The `versions` link its owner advertised — a project's, or a song's.
+    private let source: HALLink
 
     private(set) var versions: [ProjectVersion] = []
     private(set) var links = HALLinks()
@@ -28,10 +33,6 @@ final class VersionHistoryModel {
     private(set) var isWorking = false
     var errorMessage: String?
 
-    /// True when the server offered a history at all. A project resource
-    /// without the `versions` rel simply has no history to show.
-    var isAvailable: Bool { project.hasLink(.versions) }
-
     var canCreate: Bool { links.contains(.create) }
 
     /// Snapshots the writer named deliberately. Kept apart from the automatic
@@ -40,19 +41,18 @@ final class VersionHistoryModel {
 
     var autoSaves: [ProjectVersion] { versions.filter(\.isAutoSave) }
 
-    init(app: AppModel, project: Project) {
+    init(app: AppModel, source: HALLink) {
         self.app = app
-        self.project = project
+        self.source = source
     }
 
     // MARK: - Loading
 
     func load() async {
-        guard let link = project.link(.versions) else { return }
         isLoading = true
         defer { isLoading = false }
         do {
-            let collection: HALCollection<ProjectVersion> = try await app.client.fetch(from: link)
+            let collection: HALCollection<ProjectVersion> = try await app.client.fetch(from: source)
             // Newest first: a version history is read from the present backwards.
             versions = collection.items.sorted {
                 ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)

@@ -798,10 +798,21 @@ final class ScriptModel {
             (.export, "Fountain", "fountain"),
             (.exportDocx, "Word", "docx"),
             (.exportFdx, "Final Draft", "fdx"),
+            (.exportEpub, "EPUB", "epub"),
+            (.exportArchive, "Scripty Archive", "scripty.json"),
         ]
         return all.compactMap { rel, label, ext in
             project.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
         }
+    }
+
+    /// The option to print from, when the server can render one.
+    ///
+    /// Printing goes through the PDF export rather than drawing the blocks
+    /// again on the device, so the paper coming out of the printer is the same
+    /// document the writer would have exported — one pagination, not two.
+    var printableOption: ExportOption? {
+        exportOptions.first { $0.rel == .exportPdf }
     }
 
     /// Downloads an export with auth and writes it to a shareable temp file.

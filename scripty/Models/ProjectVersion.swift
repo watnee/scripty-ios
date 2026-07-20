@@ -21,11 +21,17 @@ struct ProjectVersion: Decodable, Identifiable, Hashable, HALResource {
     var sceneCount: Int?
     var blockCount: Int?
     var characterCount: Int?
+    /// A song snapshot reports its title and how many lyric lines it held,
+    /// where a screenplay reports scenes and elements. Both arrive here: the
+    /// history is the same feature either way, and only the counts differ.
+    var title: String?
+    var lineCount: Int?
     var changeSummary: VersionChangeSummary?
     let links: HALLinks?
 
     private enum CodingKeys: String, CodingKey {
         case id, label, createdAt, autoSave, sceneCount, blockCount, characterCount
+        case title, lineCount
         case changeSummary
         case links = "_links"
     }
@@ -51,6 +57,9 @@ struct ProjectVersion: Decodable, Identifiable, Hashable, HALResource {
         if let characters = characterCount, characters > 0 {
             parts.append("\(characters) " + (characters == 1 ? "character" : "characters"))
         }
+        if let lines = lineCount {
+            parts.append("\(lines) " + (lines == 1 ? "line" : "lines"))
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -70,6 +79,12 @@ struct VersionChangeSummary: Decodable, Hashable {
     var charactersAdded: Int?
     var charactersRemoved: Int?
     var projectMetadataChanged: Bool?
+    /// A song snapshot counts lyric lines and flags a retitle, where a
+    /// screenplay counts elements and scenes.
+    var linesAdded: Int?
+    var linesRemoved: Int?
+    var linesEdited: Int?
+    var titleChanged: Bool?
     /// A few human-readable lines the server already phrased.
     var details: [String]?
 
@@ -77,8 +92,10 @@ struct VersionChangeSummary: Decodable, Hashable {
     var tallies: [(symbol: String, count: Int)] {
         var result: [(String, Int)] = []
         let added = (blocksAdded ?? 0) + (scenesAdded ?? 0) + (charactersAdded ?? 0)
+            + (linesAdded ?? 0)
         let removed = (blocksRemoved ?? 0) + (scenesRemoved ?? 0) + (charactersRemoved ?? 0)
-        let edited = (blocksEdited ?? 0) + (scenesRenamed ?? 0)
+            + (linesRemoved ?? 0)
+        let edited = (blocksEdited ?? 0) + (scenesRenamed ?? 0) + (linesEdited ?? 0)
         if added > 0 { result.append(("+", added)) }
         if removed > 0 { result.append(("−", removed)) }
         if edited > 0 { result.append(("~", edited)) }
@@ -86,7 +103,10 @@ struct VersionChangeSummary: Decodable, Hashable {
     }
 
     var isEmpty: Bool {
-        tallies.isEmpty && !(projectMetadataChanged ?? false) && (details ?? []).isEmpty
+        tallies.isEmpty
+            && !(projectMetadataChanged ?? false)
+            && !(titleChanged ?? false)
+            && (details ?? []).isEmpty
     }
 }
 

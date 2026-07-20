@@ -22,6 +22,9 @@ struct scriptyApp: App {
                     Task { await appModel.enterDemo() }
                 }
         }
+        // Real menus on the Mac, and real keyboard shortcuts on an iPad with
+        // a keyboard attached. Every item is disabled until a script has focus.
+        .commands { ScriptCommands() }
     }
 }
 

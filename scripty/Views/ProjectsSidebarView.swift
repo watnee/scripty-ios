@@ -41,6 +41,9 @@ struct ProjectsSidebarView: View {
     /// the server has said where the trash is.
     @State private var trashLink: HALLink?
     @State private var renamingProject: Project?
+    /// The API root's `teams` link, present only for a user who may manage
+    /// them. Held so the sheet opens from the link, not a bare flag.
+    @State private var teamsLink: HALLink?
     @State private var searchText = ""
     @AppStorage("projectListSort") private var sortMode = ProjectSort.lastEdited
 
@@ -158,6 +161,17 @@ struct ProjectsSidebarView: View {
                     }
                 }
             }
+            // Only for a user the server lets manage teams — the root advertises
+            // the rel to no one else.
+            if let teams = app.apiRoot?.link(.teams) {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        teamsLink = teams
+                    } label: {
+                        Label("Teams", systemImage: "person.3")
+                    }
+                }
+            }
             ToolbarItem(placement: .secondaryAction) {
                 Button(role: .destructive) {
                     app.signOut()
@@ -177,6 +191,9 @@ struct ProjectsSidebarView: View {
                 onChanged: { await model.refresh() }) { project in
                     TrashedProjectRow(project: project)
                 }
+        }
+        .sheet(item: $teamsLink) { link in
+            TeamsView(app: app, source: link, projects: model.projects)
         }
         .sheet(isPresented: $showingCreate) {
             ProjectTitleSheet(title: "", heading: "New Project") { title in

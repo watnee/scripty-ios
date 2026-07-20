@@ -145,12 +145,18 @@ actor DemoBackend {
             case "block":
                 return routeSongBlock(method: method, path: Array(path.dropFirst(3)),
                                       query: query, fields: fields)
+            case "version":
+                return routeSongVersion(method: method, path: Array(path.dropFirst(3)),
+                                        query: query, fields: fields)
             default:
                 return notFound()
             }
         case (_, "api", "actor"):
             return routeActor(method: method, path: Array(path.dropFirst(2)),
                               query: query, fields: fields)
+        case (_, "api", "team"):
+            return routeTeam(method: method, path: Array(path.dropFirst(2)),
+                             query: query, fields: fields)
         default:
             return notFound()
         }
@@ -245,7 +251,13 @@ actor DemoBackend {
                        "title": projects[index].title,
                        "_links": ["self": link("/api/project/\(id)/sync-status")]])
         case ("GET", "export"):
-            return (200, Data(fountainExport(projects[index]).utf8))
+            // The format is the next path segment; every rel points here. The
+            // demo returns a plausible file per format so the export and print
+            // flows can be exercised offline, not just the fountain one.
+            let format = path.dropFirst(2).first ?? "fountain"
+            return demoExport(projects[index], format: format)
+        case ("GET", "contact-suggestions"):
+            return contactSuggestions(matching: query["q"] ?? "")
         case ("POST", "toggleDefault"):
             defaultProjectId = (defaultProjectId == id) ? nil : id
             return projectCollection()
@@ -1406,6 +1418,7 @@ actor DemoBackend {
                 "self": link("/api/song/block?documentId=\(documentId)&editionId=\(editionId)"),
                 "create": link("/api/song/block?documentId=\(documentId)&editionId=\(editionId)"),
                 "song": link("/api/document/\(documentId)"),
+                "versions": link("/api/song/version?documentId=\(documentId)"),
             ],
         ])
     }
@@ -1924,6 +1937,111 @@ actor DemoBackend {
         return json
     }
 
+    // MARK: - Song versions
+
+    /// A song's snapshot history, kept per document. Mirrors the project one but
+    /// counts lyric lines instead of scenes, which is what the shared history
+    /// view shows for a song.
+    private struct DemoSongVersion {
+        var id: Int
+        var label: String?
+        var title: String
+        var createdAt: Date
+        var autoSave: Bool
+        var lines: [DemoSongBlock]
+    }
+
+    private var songVersions: [Int: [DemoSongVersion]] = [:]
+
+    private func routeSongVersion(method: String, path: [String],
+                                  query: [String: String],
+                                  fields: [String: Any]) -> (Int, Data) {
+        guard let documentId = query["documentId"].flatMap(Int.init) else {
+            return badRequest("documentId")
+        }
+        switch (method, path.count) {
+        case ("GET", 0):
+            return songVersionCollection(documentId)
+        case ("POST", 0):
+            let label = (fields["label"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            recordSongVersion(documentId,
+                              label: (label?.isEmpty ?? true) ? "Version" : label,
+                              autoSave: false)
+            return songVersionCollection(documentId)
+        default:
+            break
+        }
+
+        guard let versionId = path.first.flatMap(Int.init),
+              let index = songVersions[documentId]?.firstIndex(where: { $0.id == versionId })
+        else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("POST", "restore"):
+            recordSongVersion(documentId, label: "Before restore", autoSave: true)
+            if let editionId = defaultSongEditionId(for: documentId) {
+                songBlocks[editionId] = songVersions[documentId]![index].lines
+            }
+            return songVersionCollection(documentId)
+        case ("DELETE", nil):
+            songVersions[documentId]?.remove(at: index)
+            return songVersionCollection(documentId)
+        default:
+            return notFound()
+        }
+    }
+
+    /// The edition whose lines a song version snapshots — the default one, which
+    /// is what a single-edition song always resolves to.
+    private func defaultSongEditionId(for documentId: Int) -> Int? {
+        songEditions.first { $0.documentId == documentId }?.id
+    }
+
+    private func recordSongVersion(_ documentId: Int, label: String?, autoSave: Bool) {
+        let lines = defaultSongEditionId(for: documentId).flatMap { songBlocks[$0] } ?? []
+        let title = documents.values.flatMap { $0 }
+            .first { $0.id == documentId }?.title ?? "Song"
+        let version = DemoSongVersion(
+            id: nextVersionId, label: label, title: title,
+            createdAt: Date(), autoSave: autoSave, lines: lines)
+        nextVersionId += 1
+        songVersions[documentId, default: []].append(version)
+    }
+
+    private func songVersionCollection(_ documentId: Int) -> (Int, Data) {
+        let items = (songVersions[documentId] ?? [])
+            .sorted { $0.createdAt > $1.createdAt }
+            .map { songVersionJSON($0, documentId: documentId) }
+        return ok([
+            "_embedded": ["songVersionResourceList": items],
+            "_links": [
+                "self": link("/api/song/version?documentId=\(documentId)"),
+                "create": link("/api/song/version?documentId=\(documentId)"),
+                "song": link("/api/document/\(documentId)"),
+            ],
+        ])
+    }
+
+    private func songVersionJSON(_ version: DemoSongVersion, documentId: Int) -> [String: Any] {
+        var json: [String: Any] = [
+            "id": version.id,
+            "title": version.title,
+            "createdAt": iso.string(from: version.createdAt),
+            "autoSave": version.autoSave,
+            "lineCount": version.lines.count,
+            "_links": [
+                "self": link("/api/song/version/\(version.id)?documentId=\(documentId)"),
+                "versions": link("/api/song/version?documentId=\(documentId)"),
+                "restore": link("/api/song/version/\(version.id)/restore?documentId=\(documentId)"),
+                "delete": link("/api/song/version/\(version.id)?documentId=\(documentId)"),
+                "song": link("/api/document/\(documentId)"),
+            ],
+        ]
+        if let label = version.label { json["label"] = label }
+        return json
+    }
+
     private func snapshot(_ projectId: Int) {
         undoStacks[projectId, default: []].append(blocks[projectId] ?? [])
         if undoStacks[projectId]!.count > 50 {
@@ -1963,10 +2081,93 @@ actor DemoBackend {
 
     // MARK: - Resource JSON
 
+    // MARK: - Teams
+
+    private struct DemoTeam {
+        var id: Int
+        var name: String
+    }
+
+    /// Seeded with the team every demo project already shows a badge for, so the
+    /// list is not empty on first open.
+    private lazy var teamsStore: [DemoTeam] = [DemoTeam(id: 1, name: "Demo")]
+    private lazy var nextTeamId = 2
+
+    private func routeTeam(method: String, path: [String],
+                           query: [String: String],
+                           fields: [String: Any]) -> (Int, Data) {
+        switch (method, path.count) {
+        case ("GET", 0):
+            return teamCollection()
+        case ("POST", 0):
+            guard let name = (fields["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                return badRequest("name")
+            }
+            let team = DemoTeam(id: nextTeamId, name: name)
+            nextTeamId += 1
+            teamsStore.append(team)
+            return ok(teamJSON(team))
+        default:
+            break
+        }
+
+        guard let id = path.first.flatMap(Int.init),
+              let index = teamsStore.firstIndex(where: { $0.id == id }) else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("GET", nil):
+            return ok(teamJSON(teamsStore[index]))
+        case ("PUT", nil):
+            guard let name = (fields["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                return badRequest("name")
+            }
+            teamsStore[index].name = name
+            return ok(teamJSON(teamsStore[index]))
+        case ("PUT", "productions"):
+            // The demo does not re-badge its projects, so this just acknowledges
+            // the assignment; the point offline is that the flow completes.
+            return ok(teamJSON(teamsStore[index]))
+        case ("DELETE", nil):
+            let removed = teamsStore.remove(at: index)
+            return ok(teamJSON(removed))
+        default:
+            return notFound()
+        }
+    }
+
+    private func teamCollection() -> (Int, Data) {
+        let items = teamsStore
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { teamJSON($0) }
+        return ok([
+            "_embedded": ["teamResourceList": items],
+            "_links": ["self": link("/api/team")],
+        ])
+    }
+
+    private func teamJSON(_ team: DemoTeam) -> [String: Any] {
+        [
+            "id": team.id,
+            "name": team.name,
+            "_links": [
+                "self": link("/api/team/\(team.id)"),
+                "teams": link("/api/team"),
+                "update": link("/api/team/\(team.id)"),
+                "assignProductions": link("/api/team/\(team.id)/productions"),
+                "delete": link("/api/team/\(team.id)"),
+            ],
+        ]
+    }
+
     private func rootJSON() -> [String: Any] {
+        // `teams` is advertised here as it is on the server for a user allowed
+        // to manage them; the demo's single account stands in for that admin.
         ["_links": ["self": link("/api"),
                     "projects": link("/api/project"),
-                    "actors": link("/api/actor")]]
+                    "actors": link("/api/actor"),
+                    "teams": link("/api/team")]]
     }
 
     private func projectJSON(_ project: DemoProject) -> [String: Any] {
@@ -1987,12 +2188,18 @@ actor DemoBackend {
                 "undoRedoStatus": link("/api/project/\(project.id)/undo-redo-status"),
                 "syncStatus": link("/api/project/\(project.id)/sync-status"),
                 "export": link("/api/project/\(project.id)/export/fountain"),
+                "exportPdf": link("/api/project/\(project.id)/export/pdf"),
+                "exportDocx": link("/api/project/\(project.id)/export/docx"),
+                "exportFdx": link("/api/project/\(project.id)/export/fdx"),
+                "exportEpub": link("/api/project/\(project.id)/export/epub"),
+                "exportArchive": link("/api/project/\(project.id)/export/scripty"),
                 "actors": link("/api/actor?projectId=\(project.id)"),
                 "importScript": link("/api/project/\(project.id)/import-script"),
                 "versions": link("/api/project/version?projectId=\(project.id)"),
                 "editions": link("/api/project/edition?projectId=\(project.id)"),
                 "activity": link("/api/project/\(project.id)/activity"),
                 "invitations": link("/api/project/\(project.id)/invitations"),
+                "contact-suggestions": link("/api/project/\(project.id)/contact-suggestions"),
             ],
         ]
         if let writers = project.writers { json["writers"] = writers }
@@ -2294,6 +2501,74 @@ actor DemoBackend {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// A file for each export format the demo advertises.
+    ///
+    /// The demo has no real PDF/DOCX/EPUB engines, so it returns the fountain
+    /// text for the text-shaped formats and a genuine one-page PDF for `pdf` —
+    /// the latter so the print flow, which hands its bytes to the system print
+    /// panel, has something valid to render offline.
+    private func demoExport(_ project: DemoProject, format: String) -> (Int, Data) {
+        switch format {
+        case "pdf":
+            return (200, minimalPDF(title: project.title))
+        case "scripty", "json":
+            let archive: [String: Any] = [
+                "project": ["title": project.title],
+                "blocks": (blocks[project.id] ?? [])
+                    .sorted { $0.order < $1.order }
+                    .map { ["type": $0.type, "content": $0.content] },
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: archive, options: [.prettyPrinted]))
+                ?? Data()
+            return (200, data)
+        default:
+            // fountain, docx, fdx, epub — the demo serves the plain text it can
+            // actually produce; the point offline is that the rel resolves.
+            return (200, Data(fountainExport(project).utf8))
+        }
+    }
+
+    /// The smallest well-formed PDF: one blank US-Letter page. Enough for the
+    /// print panel to open on a real document rather than reject empty bytes.
+    private func minimalPDF(title: String) -> Data {
+        let objects = [
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n",
+        ]
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for object in objects {
+            offsets.append(pdf.utf8.count)
+            pdf += object
+        }
+        let xrefStart = pdf.utf8.count
+        pdf += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets {
+            pdf += String(format: "%010d 00000 n \n", offset)
+        }
+        pdf += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\n"
+        pdf += "startxref\n\(xrefStart)\n%%EOF"
+        return Data(pdf.utf8)
+    }
+
+    /// A couple of stand-in contacts, filtered by what has been typed. Enough to
+    /// show the invite autofill working offline without inventing a directory.
+    private func contactSuggestions(matching query: String) -> (Int, Data) {
+        let all: [(name: String, email: String, source: String)] = [
+            ("Ava Collaborator", "ava@example.com", "Collaborator"),
+            ("Sam Reader", "sam@example.com", "Reader"),
+            ("Casting Office", "casting@example.com", "Cast"),
+        ]
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let matches = q.isEmpty ? [] : all.filter {
+            $0.name.lowercased().contains(q) || $0.email.lowercased().contains(q)
+        }
+        let items = matches.map { ["name": $0.name, "email": $0.email, "sourceLabel": $0.source] }
+        return ok(["_embedded": ["contactSuggestionViewModelList": items],
+                   "_links": ["self": link("/api/project/contact-suggestions")]])
     }
 
     // MARK: - Helpers
