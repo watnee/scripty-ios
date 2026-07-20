@@ -56,7 +56,12 @@ struct ScriptView: View {
                 editor
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { editionBanner }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                unsavedBanner
+                editionBanner
+            }
+        }
         .navigationTitle(model.project.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -158,6 +163,43 @@ struct ScriptView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
+        }
+    }
+
+    /// Standing notice that some of what is on screen only exists on this
+    /// device. It replaces the alert that a dropped connection used to throw
+    /// up on every keystroke: the writing is safe and a retry is already in
+    /// flight, so the honest thing to do is say so quietly and keep out of the
+    /// way rather than demand a tap before the next word can be typed.
+    @ViewBuilder
+    private var unsavedBanner: some View {
+        if model.hasUnsavedChanges {
+            let count = model.unsavedBlockIds.count
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                    .font(.caption)
+                Text("Not saved yet")
+                    .fontWeight(.medium)
+                Text("· \(count) " + (count == 1 ? "element" : "elements")
+                     + " kept on this device")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity)
+            .background(.orange.opacity(0.12))
+            .overlay(alignment: .bottom) { Divider() }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(count) " + (count == 1 ? "element is" : "elements are")
+                + " not saved to the server yet. Your work is kept on this device "
+                + "and will be saved when the connection returns.")
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.snappy(duration: 0.2), value: count)
         }
     }
 

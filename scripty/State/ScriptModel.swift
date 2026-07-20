@@ -49,8 +49,25 @@ final class ScriptModel {
     /// split or merge moves focus to a specific offset).
     var caretRequests: [Int: Int] = [:]
 
+    /// Blocks whose latest text failed to reach the server. Their entry in
+    /// `liveText` is the *only* copy of those words, so it is held rather than
+    /// cleared until a retry lands — otherwise the row would snap back to the
+    /// stale server content and the writing would be gone.
+    private(set) var unsavedBlockIds: Set<Int> = []
+
+    /// True while any element is holding text the server hasn't accepted.
+    var hasUnsavedChanges: Bool { !unsavedBlockIds.isEmpty }
+
     private var commitTasks: [Int: Task<Void, Never>] = [:]
     private static let commitDebounce: Duration = .milliseconds(600)
+
+    private var retryTasks: [Int: Task<Void, Never>] = [:]
+    private var retryAttempts: [Int: Int] = [:]
+    /// Backoff for re-sending a failed commit. Runs out rather than retrying
+    /// forever: past this the banner keeps saying the work is unsaved, and the
+    /// next keystroke re-arms the whole cycle anyway.
+    private static let retryDelays: [Duration] =
+        [.seconds(2), .seconds(5), .seconds(15), .seconds(30), .seconds(60)]
 
     private var lastRevision: Int64 = 0
     private var syncTask: Task<Void, Never>?
@@ -167,6 +184,9 @@ final class ScriptModel {
         do {
             try await app.client.data(for: link, method: "DELETE")
             blocks.removeAll { $0.id == block.id }
+            // Nothing left to save it into.
+            liveText[block.id] = nil
+            markSaved(block.id)
             await refreshUndoRedo()
             errorMessage = nil
         } catch {
@@ -219,15 +239,21 @@ final class ScriptModel {
     /// Called on every keystroke: stash the text and (re)arm the debounced PUT.
     func liveEdit(_ block: Block, text: String) {
         liveText[block.id] = text
+        // Fresh typing earns a fresh set of retries: the backoff having run
+        // out ten minutes ago shouldn't leave this keystroke with none.
+        retryAttempts[block.id] = nil
         scheduleCommit(block.id)
     }
 
     /// Focus left this block — flush any pending text and stop treating its live
     /// value as authoritative.
+    ///
+    /// The live copy survives a failed flush: it is the writer's only copy of
+    /// those words until the retry lands.
     func blur(_ block: Block) async {
         await commit(block.id)
         if focusedBlockId == block.id { focusedBlockId = nil }
-        liveText[block.id] = nil
+        if !unsavedBlockIds.contains(block.id) { liveText[block.id] = nil }
         hasActiveEdit = focusedBlockId != nil
     }
 
@@ -247,18 +273,70 @@ final class ScriptModel {
         commitTasks[id] = nil
         guard let text = liveText[id],
               let block = blocks.first(where: { $0.id == id }) else { return nil }
-        guard text != (block.content ?? ""), let link = block.link(.update) else { return block }
+        guard text != (block.content ?? ""), let link = block.link(.update) else {
+            markSaved(id)
+            return block
+        }
         do {
             let updated: Block = try await app.client.fetch(
                 from: link, method: "PUT",
                 body: EditBlockCommand(content: text, personId: block.personId, tags: block.tags))
             replace(updated)
+            markSaved(id)
             await refreshUndoRedo()
             errorMessage = nil
             return updated
         } catch {
-            report(error)
+            markUnsaved(id, after: error)
+            reportUnlessRetrying(error)
             return nil
+        }
+    }
+
+    // MARK: - Unsaved-work bookkeeping
+
+    /// The server has this block's text; the live copy is no longer precious.
+    private func markSaved(_ id: Int) {
+        unsavedBlockIds.remove(id)
+        retryTasks[id]?.cancel()
+        retryTasks[id] = nil
+        retryAttempts[id] = nil
+    }
+
+    /// A write failed. Flag the block so its live text is held, and — when the
+    /// failure was the kind that might clear up by itself — try again on a
+    /// backoff rather than making the writer notice and retype.
+    private func markUnsaved(_ id: Int, after error: Error) {
+        unsavedBlockIds.insert(id)
+        guard error.isRetryableAPIError else { return }
+        let attempt = retryAttempts[id] ?? 0
+        guard attempt < Self.retryDelays.count else { return }
+        retryAttempts[id] = attempt + 1
+        let delay = Self.retryDelays[attempt]
+        retryTasks[id]?.cancel()
+        retryTasks[id] = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.commit(id)
+        }
+    }
+
+    /// Give up on a speculative write (a merge that couldn't be persisted) and
+    /// put the block's live text back the way it was.
+    private func rollback(_ id: Int, to previous: String?) {
+        liveText[id] = previous
+        if previous == nil { markSaved(id) }
+    }
+
+    /// Surface a failure the writer has to do something about. A failure we
+    /// are already retrying is not one of those: the unsaved-work banner says
+    /// so continuously, which beats a modal alert interrupting every keystroke
+    /// for as long as the connection is down.
+    private func reportUnlessRetrying(_ error: Error) {
+        if error.isRetryableAPIError {
+            app.handle(error)
+        } else {
+            report(error)
         }
     }
 
@@ -279,12 +357,26 @@ final class ScriptModel {
         }
 
         // Persist the (possibly retyped, possibly trimmed) current block.
+        //
+        // If that write fails, abandon the split rather than pressing on: the
+        // text after the caret only belongs in a new element once the text
+        // before it is safely stored. `before` stays in `liveText` (flagged
+        // unsaved) and `after` stays on screen as part of this block, so the
+        // writer's line is intact and Return can simply be pressed again.
         liveText[block.id] = before
         let source: Block
         if currentType != block.blockType {
-            source = await retype(block, to: currentType, content: before) ?? block
+            guard let retyped = await retype(block, to: currentType, content: before) else {
+                liveText[block.id] = full
+                return
+            }
+            source = retyped
         } else {
-            source = await commit(block.id) ?? block
+            guard let committed = await commit(block.id) else {
+                liveText[block.id] = full
+                return
+            }
+            source = committed
         }
         liveText[block.id] = nil
 
@@ -309,17 +401,29 @@ final class ScriptModel {
     func mergeIntoPrevious(_ block: Block) async {
         guard let index = blocks.firstIndex(where: { $0.id == block.id }), index > 0,
               let previous = blocks[..<index].last(where: { $0.hasLink(.update) }) else { return }
-        let seam = currentText(previous).count
-        let merged = currentText(previous) + currentText(block)
+        let previousText = currentText(previous)
+        let seam = previousText.count
+        let merged = previousText + currentText(block)
 
+        // A merge that can't be persisted must leave both elements exactly as
+        // they were — half a merge would show the writer their own words twice.
+        let restore = liveText[previous.id]
         liveText[previous.id] = merged
-        let updatedPrevious = await commit(previous.id) ?? previous
+        guard let updatedPrevious = await commit(previous.id) else {
+            rollback(previous.id, to: restore)
+            return
+        }
         liveText[previous.id] = nil   // model value is now authoritative for the merged row
 
         if let deleteLink = block.link(.delete) {
             do {
                 try await app.client.data(for: deleteLink, method: "DELETE")
             } catch {
+                // The absorbed element is still there, so the merged text now
+                // appears twice. Put the previous block back and leave the
+                // script as it was before the Backspace.
+                liveText[previous.id] = previousText
+                await commit(previous.id)
                 report(error)
                 return
             }
@@ -354,11 +458,21 @@ final class ScriptModel {
                                      personId: block.personId, tags: block.tags))
             replace(updated)
             liveText[block.id] = nil
+            markSaved(block.id)
             await refreshUndoRedo()
             errorMessage = nil
             return updated
         } catch {
-            report(error)
+            // The retype carried the writer's text with it, so a failure here
+            // loses words just as a failed commit would. Hold the live copy
+            // and retry it as a plain content save — the type change is the
+            // part worth dropping, not the writing.
+            if content != nil {
+                markUnsaved(block.id, after: error)
+                reportUnlessRetrying(error)
+            } else {
+                report(error)
+            }
             return nil
         }
     }

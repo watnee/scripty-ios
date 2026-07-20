@@ -32,6 +32,13 @@ final class APIClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
         configuration.httpCookieAcceptPolicy = .never
+        // A writer on a train shouldn't get an instant failure the moment the
+        // signal drops: hold the request until the connection comes back, up
+        // to the resource timeout. The per-request timeout still bounds a
+        // server that has accepted the connection and then gone quiet.
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 120
         session = URLSession(configuration: configuration)
 
         decoder = JSONDecoder()
@@ -72,12 +79,7 @@ final class APIClient {
             (statusCode, data) = await demo.respond(method: method, url: url,
                                                     body: request.httpBody)
         } else {
-            let (received, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw APIError.server(status: -1)
-            }
-            data = received
-            statusCode = http.statusCode
+            (statusCode, data) = try await perform(request)
         }
         switch statusCode {
         case 200..<300:
@@ -94,6 +96,23 @@ final class APIClient {
         default:
             throw APIError.server(status: statusCode)
         }
+    }
+
+    /// Runs a request and reports the outcome as a status code, translating
+    /// transport failures into `APIError` so no caller ever has to surface a
+    /// raw `NSURLErrorDomain` string to the writer.
+    private func perform(_ request: URLRequest) async throws -> (Int, Data) {
+        let received: Data
+        let response: URLResponse
+        do {
+            (received, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.from(transportError: error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.server(status: -1)
+        }
+        return (http.statusCode, received)
     }
 
     func fetch<T: Decodable>(_ type: T.Type = T.self,
@@ -147,12 +166,7 @@ final class APIClient {
                 request.setValue(credentials.basicAuthorizationHeader, forHTTPHeaderField: "Authorization")
             }
             request.httpBody = body
-            let (received, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw APIError.server(status: -1)
-            }
-            data = received
-            statusCode = http.statusCode
+            (statusCode, data) = try await perform(request)
         }
         switch statusCode {
         case 200..<300:

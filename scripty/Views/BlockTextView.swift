@@ -17,6 +17,9 @@ struct BlockTextView: UIViewRepresentable {
     let font: UIFont
     let alignment: NSTextAlignment
     let autocapitalize: UITextAutocapitalizationType
+    /// Names the screenplay element type for VoiceOver; the spoken value stays
+    /// the block's own text.
+    let accessibilityLabel: String
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model, block: block) }
 
@@ -38,6 +41,9 @@ struct BlockTextView: UIViewRepresentable {
         }
         context.coordinator.textView = view
         apply(font: font, alignment: alignment, capitalize: autocapitalize, to: view)
+        if view.accessibilityLabel != accessibilityLabel {
+            view.accessibilityLabel = accessibilityLabel
+        }
         return view
     }
 
@@ -75,6 +81,9 @@ struct BlockTextView: UIViewRepresentable {
         // storage from the view's plain font/colour, dropping the underline
         // attribute, so styling has to be re-stamped on top of the new string.
         apply(font: font, alignment: alignment, capitalize: autocapitalize, to: view)
+        if view.accessibilityLabel != accessibilityLabel {
+            view.accessibilityLabel = accessibilityLabel
+        }
 
         if model.focusedBlockId == block.id, !view.isFirstResponder {
             // A row just inserted into the LazyVStack isn't in the window during

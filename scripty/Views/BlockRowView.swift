@@ -94,6 +94,28 @@ struct BlockRowView: View {
         .frame(maxWidth: Self.pageWidth, alignment: .leading)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .topTrailing) { badges }
+        // A screenplay is carried by which *kind* of line each one is: sighted
+        // readers get that from the indentation and the capitalisation, both of
+        // which are purely visual. Without naming the type, VoiceOver reads a
+        // scene heading, a character cue and a transition identically.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityDescription)
+    }
+
+    private var accessibilityDescription: String {
+        if block.blockType == .pageBreak { return "Page break" }
+
+        var parts = [block.blockType.label]
+        let content = displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        parts.append(content.isEmpty ? "empty" : content)
+
+        let tags = block.tagList
+        if !tags.isEmpty {
+            parts.append("Tagged " + tags.joined(separator: ", "))
+        }
+        if block.isPinned { parts.append("Pinned") }
+        if block.isBookmarked { parts.append("Bookmarked") }
+        return parts.joined(separator: ". ")
     }
 
     /// Tags sit under the element as small badges, the way the web row shows

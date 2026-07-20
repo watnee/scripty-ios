@@ -89,8 +89,21 @@ struct ScriptSearchBar: View {
         }
         .onAppear { isFocused = true }
         .onChange(of: search.query) { _, _ in
-            // A new query makes the last replace's tally meaningless.
+            // A new query makes the last replace's tally meaningless. This part
+            // is immediate — the stale count must not outlive the query that
+            // produced it, even for a moment.
             resultMessage = nil
+        }
+        .task(id: search.query) {
+            // Scanning every block builds a snippet per hit, so on a feature
+            // script it is far too much work to redo between two keystrokes.
+            // Wait for a pause in the typing first; a cancelled task means
+            // another character arrived and this scan was never needed.
+            //
+            // Shorter than the commit debounce on purpose: a stale "3 of 12"
+            // is read immediately, whereas an unsaved keystroke is not.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
             search.refresh(in: model.blocks)
             // Land on the first hit as soon as the query resolves to one.
             if let match = search.current { navigator.jump(to: match.blockId) }

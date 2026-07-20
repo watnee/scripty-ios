@@ -32,13 +32,25 @@ struct EditableBlockRow: View {
 
     var body: some View {
         BlockTextView(model: model, block: block,
-                      font: uiFont, alignment: nsAlignment, autocapitalize: capitalization)
+                      font: uiFont, alignment: nsAlignment, autocapitalize: capitalization,
+                      accessibilityLabel: accessibilityDescription)
             .blockHighlight(block)
             .frame(maxWidth: columnWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: pageAlignment)
             .padding(.top, topPadding)
             .overlay(alignment: .topTrailing) { badges }
             .contextMenu { contextMenu }
+    }
+
+    /// Names the element type — and any badge — for VoiceOver, which otherwise
+    /// hears an anonymous text field per line. Deliberately the *label* on the
+    /// text view rather than a wrapper element: the value stays the block's own
+    /// text, so reading, editing and caret navigation all still work.
+    private var accessibilityDescription: String {
+        var parts = [block.blockType.label]
+        if block.isPinned { parts.append("Pinned") }
+        if block.isBookmarked { parts.append("Bookmarked") }
+        return parts.joined(separator: ", ")
     }
 
     // MARK: - Row actions
@@ -106,6 +118,8 @@ struct EditableBlockRow: View {
         }
         .font(.caption2)
         .foregroundStyle(.orange)
+        // Both badges are already spoken as part of the row's label.
+        .accessibilityHidden(true)
     }
 
     // MARK: - Per-type layout
@@ -167,17 +181,6 @@ struct EditableBlockRow: View {
     }
 
     private var uiFont: UIFont {
-        let size: CGFloat = 16 * textScale
-        let base: UIFont
-        switch ScriptFont(serverValue: block.font) {
-        case .arial:
-            base = UIFont(name: "Helvetica", size: size) ?? .systemFont(ofSize: size)
-        case .timesNewRoman:
-            base = UIFont(name: "TimesNewRomanPSMT", size: size) ?? .systemFont(ofSize: size)
-        case .courierPrime, .none:
-            base = .monospacedSystemFont(ofSize: size, weight: .regular)
-        }
-
         var traits: UIFontDescriptor.SymbolicTraits = []
         switch block.blockType {
         case .scene: traits.insert(.traitBold)
@@ -188,9 +191,48 @@ struct EditableBlockRow: View {
         if block.textBold ?? false { traits.insert(.traitBold) }
         if block.textItalic ?? false { traits.insert(.traitItalic) }
 
-        if let descriptor = base.fontDescriptor.withSymbolicTraits(traits) {
-            return UIFont(descriptor: descriptor, size: size)
+        return Self.font(family: ScriptFont(serverValue: block.font),
+                         size: 16 * textScale,
+                         traits: traits)
+    }
+
+    /// Resolved fonts, kept between updates.
+    ///
+    /// Every keystroke invalidates the observed editing state, so SwiftUI
+    /// re-runs the update for each visible row — and building a `UIFont` from
+    /// a descriptor is not free. A whole script only ever uses a handful of
+    /// (family, size, traits) combinations, so they are worth holding onto:
+    /// the work collapses to a dictionary lookup after the first row of each
+    /// kind. Bounded by the type-size control having a fixed set of steps.
+    @MainActor private static var fontCache: [FontKey: UIFont] = [:]
+
+    private struct FontKey: Hashable {
+        let family: ScriptFont?
+        let size: CGFloat
+        /// `SymbolicTraits` is an OptionSet and so isn't Hashable on its own.
+        let traits: UInt32
+    }
+
+    @MainActor
+    private static func font(family: ScriptFont?,
+                             size: CGFloat,
+                             traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
+        let key = FontKey(family: family, size: size, traits: traits.rawValue)
+        if let cached = fontCache[key] { return cached }
+
+        let base: UIFont
+        switch family {
+        case .arial:
+            base = UIFont(name: "Helvetica", size: size) ?? .systemFont(ofSize: size)
+        case .timesNewRoman:
+            base = UIFont(name: "TimesNewRomanPSMT", size: size) ?? .systemFont(ofSize: size)
+        case .courierPrime, .none:
+            base = .monospacedSystemFont(ofSize: size, weight: .regular)
         }
-        return base
+
+        let resolved = base.fontDescriptor.withSymbolicTraits(traits)
+            .map { UIFont(descriptor: $0, size: size) } ?? base
+        fontCache[key] = resolved
+        return resolved
     }
 }

@@ -23,6 +23,10 @@ final class AppModel {
     private(set) var isDemo = false
     var signInError: String?
 
+    /// False when the keychain refused to hold this session's credentials, so
+    /// signing in again will be needed after the app is quit.
+    private(set) var isSessionPersisted = true
+
     private(set) var client = APIClient()
 
     /// Set via launch arguments (`-scripty.demo YES`) to boot straight into
@@ -70,7 +74,15 @@ final class AppModel {
         client.credentials = credentials
         do {
             apiRoot = try await client.fetch(APIRoot.self, from: client.rootLink)
-            try? KeychainStore.save(credentials)
+            // A keychain that won't hold the credentials doesn't stop this
+            // session, but it does mean the next cold launch lands back on
+            // this screen — better to say so now than to look like a bug then.
+            do {
+                try KeychainStore.save(credentials)
+                isSessionPersisted = true
+            } catch {
+                isSessionPersisted = false
+            }
             signInError = nil
             phase = .signedIn
         } catch APIError.unauthorized {

@@ -23,12 +23,24 @@ struct ReadScriptView: View {
     /// The reader's measure: roughly the 40rem column the web app uses.
     private let measure: CGFloat = 640
 
+    /// The OS text-size setting, as a multiplier.
+    ///
+    /// This view sets its type in fixed points to hold the reader's
+    /// proportions — a scene heading is deliberately a shade larger than the
+    /// prose — which meant it ignored Dynamic Type entirely. Folding the
+    /// setting in as a *multiplier* keeps those proportions while still
+    /// honouring the size someone chose system-wide, and composes with the
+    /// script's own type-size control rather than overriding it.
+    @ScaledMetric(relativeTo: .body) private var dynamicTypeScale: CGFloat = 1
+
+    private var scale: CGFloat { CGFloat(textScale) * dynamicTypeScale }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(title.isEmpty ? "Untitled Project" : title)
-                        .font(.system(size: 28 * textScale, weight: .bold, design: .serif))
+                        .font(.system(size: 28 * scale, weight: .bold, design: .serif))
                         .padding(.bottom, 24)
 
                     ForEach(Array(readableBlocks.enumerated()), id: \.element.id) { index, block in
@@ -76,23 +88,30 @@ struct ReadScriptView: View {
                     Divider().padding(.bottom, 16)
                 }
                 Text(text.uppercased())
-                    .font(.system(size: 17 * textScale, weight: .bold, design: .serif))
+                    .font(.system(size: 17 * scale, weight: .bold, design: .serif))
                     .tracking(0.7)
+                    // Read back in its written case: VoiceOver spells out
+                    // all-caps runs letter by letter, which turns every scene
+                    // heading into an initialism.
+                    .accessibilityLabel(text)
+                    .accessibilityAddTraits(.isHeader)
             }
             .padding(.top, isFirst ? 0 : 16)
             .padding(.bottom, 16)
 
         case .section:
             Text(text)
-                .font(.system(size: 20 * textScale, weight: .semibold, design: .serif))
+                .font(.system(size: 20 * scale, weight: .semibold, design: .serif))
+                .accessibilityAddTraits(.isHeader)
                 .padding(.top, 20)
                 .padding(.bottom, 12)
 
         case .character, .dualDialogue:
             Text(text.uppercased())
-                .font(.system(size: 16 * textScale, weight: .bold, design: .serif))
+                .font(.system(size: 16 * scale, weight: .bold, design: .serif))
                 .tracking(0.9)
                 .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityLabel(text)
                 .padding(.top, 12)
                 .padding(.bottom, 4)
 
@@ -124,7 +143,7 @@ struct ReadScriptView: View {
                 if let name = block.personName, !name.isEmpty,
                    !block.blockType.isCharacterCue {
                     Text(name.uppercased())
-                        .font(.system(size: 15 * textScale, weight: .bold, design: .serif))
+                        .font(.system(size: 15 * scale, weight: .bold, design: .serif))
                         .tracking(0.9)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -138,7 +157,7 @@ struct ReadScriptView: View {
     /// character formatting but not the screenplay indents.
     private func prose(_ text: String, block: Block) -> Text {
         var result = Text(text.isEmpty ? " " : text)
-            .font(.system(size: 17 * textScale, design: .serif))
+            .font(.system(size: 17 * scale, design: .serif))
         if block.textBold ?? false { result = result.bold() }
         if block.textItalic ?? false { result = result.italic() }
         if block.textUnderline ?? false { result = result.underline() }
