@@ -386,6 +386,11 @@ actor DemoBackend {
 
     // MARK: - Actors (casting)
 
+    /// Which characters an actor auditions for, keyed projectId → actorId → the
+    /// set of character ids. Only meaningful in a project scope, mirroring the
+    /// server's per-project audition table.
+    private var auditions: [Int: [Int: Set<Int>]] = [:]
+
     private func routeActor(method: String, path: [String],
                             query: [String: String],
                             fields: [String: Any]) -> (Int, Data) {
@@ -396,7 +401,8 @@ actor DemoBackend {
                 actors.filter { $0.projectIds.contains(id) }
             } ?? actors
             let selfHref = projectId.map { "/api/actor?projectId=\($0)" } ?? "/api/actor"
-            return ok(["_embedded": ["actorResourceList": visible.map(actorJSON)],
+            return ok(["_embedded": ["actorResourceList":
+                        visible.map { actorJSON($0, projectId: projectId) }],
                        "_links": ["self": link(selfHref)]])
         case ("POST", 0):
             guard let first = fields["first"] as? String, !first.isEmpty else {
@@ -428,13 +434,29 @@ actor DemoBackend {
             if let value = fields["email"] as? String { actors[index].email = value }
             if let value = fields["projectIds"] as? [Int] { actors[index].projectIds = value }
             return ok(actorJSON(actors[index]))
+        case ("POST", "auditions"):
+            // Replace the actor's auditions for one project, wholesale. Per
+            // project, so a projectId is required; an empty list clears them.
+            guard let projectId = query["projectId"].flatMap(Int.init),
+                  actors[index].projectIds.contains(projectId) else {
+                return badRequest("projectId")
+            }
+            let characterIds = fields["characterIds"] as? [Int] ?? []
+            // Keep only ids that are real characters in the project.
+            let valid = Set((people[projectId] ?? []).map(\.id))
+            auditions[projectId, default: [:]][id] = Set(characterIds).intersection(valid)
+            return ok(actorJSON(actors[index], projectId: projectId))
         case ("DELETE", nil):
             let removed = actors.remove(at: index)
-            // Anyone cast as this actor becomes uncast rather than dangling.
+            // Anyone cast as this actor becomes uncast rather than dangling, and
+            // their auditions go with them.
             for (projectId, list) in people {
                 for (i, person) in list.enumerated() where person.actorId == removed.id {
                     people[projectId]?[i].actorId = nil
                 }
+            }
+            for projectId in auditions.keys {
+                auditions[projectId]?[removed.id] = nil
             }
             return ok([:])
         default:
@@ -442,20 +464,28 @@ actor DemoBackend {
         }
     }
 
-    private func actorJSON(_ actor: DemoActor) -> [String: Any] {
+    private func actorJSON(_ actor: DemoActor, projectId: Int? = nil) -> [String: Any] {
+        var links: [String: Any] = [
+            "self": link("/api/actor/\(actor.id)"),
+            "actors": link("/api/actor"),
+            "update": link("/api/actor/\(actor.id)"),
+            "delete": link("/api/actor/\(actor.id)"),
+        ]
         var json: [String: Any] = [
             "id": actor.id,
             "first": actor.first,
             "last": actor.last,
             "hasHeadshot": false,
             "projectIds": actor.projectIds,
-            "_links": [
-                "self": link("/api/actor/\(actor.id)"),
-                "actors": link("/api/actor"),
-                "update": link("/api/actor/\(actor.id)"),
-                "delete": link("/api/actor/\(actor.id)"),
-            ],
         ]
+        // Auditions ride along only on a project-scoped actor — the same as the
+        // server, which omits them (null) otherwise.
+        if let projectId {
+            let ids = (auditions[projectId]?[actor.id] ?? []).sorted()
+            json["auditionCharacterIds"] = ids
+            links["setAuditions"] = link("/api/actor/\(actor.id)/auditions?projectId=\(projectId)")
+        }
+        json["_links"] = links
         if let phone = actor.phone { json["phone"] = phone }
         if let email = actor.email { json["email"] = email }
         return json

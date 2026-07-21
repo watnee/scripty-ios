@@ -68,6 +68,11 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let exportSongDocx = Rel("exportSongDocx")
     static let exportSongEpub = Rel("exportSongEpub")
 
+    /// Replace the set of characters an actor auditions for in a project.
+    /// Advertised on a project-scoped actor only — auditions have no meaning
+    /// without a project. The audition character ids ride on the same resource.
+    static let setAuditions = Rel("setAuditions")
+
     static let headshot = Rel("headshot")
     static let documents = Rel("documents")
     static let document = Rel("document")

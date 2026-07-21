@@ -969,6 +969,97 @@ func run() async {
     _ = await be.respond(method: "POST", url: url("/api/preferences/capitalization"),
                          body: body(["character": true]))
 
+    await checkAuditions(pid: pid)
+    await checkUsers(root: root)
+
+    print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
+}
+
+/// Auditions get their own function: `run()` had grown large enough that the
+/// Swift optimizer crashed splitting the one async body.
+func checkAuditions(pid: Int) async {
+    // --- AUDITIONS ---
+    //
+    // Which characters an actor auditions for, within a project. The ids ride on
+    // the project-scoped actor (and only there — auditions have no meaning off a
+    // project); `setAuditions` replaces the whole set. Its own actor and
+    // characters, since the casting checks above deleted theirs.
+    let auditionActor = json(await be.respond(method: "POST", url: url("/api/actor"),
+                                              body: body(["first": "Nadia", "last": "Cole",
+                                                          "email": "nadia@x.com",
+                                                          "projectIds": [pid]])).data)
+    let auditionActorId = auditionActor["id"] as! Int
+
+    // A project-scoped actor carries the audition fields; an unscoped one does not.
+    let scopedActors = embedded(json(await be.respond(
+        method: "GET", url: url("/api/actor?projectId=\(pid)"), body: nil).data))
+    let scoped = scopedActors.first { $0["id"] as? Int == auditionActorId }
+    check("a project-scoped actor advertises `setAuditions`",
+          (scoped?["_links"] as? [String: Any])?["setAuditions"] != nil)
+    check("a project-scoped actor starts auditioning for no one",
+          (scoped?["auditionCharacterIds"] as? [Int])?.isEmpty == true)
+    let unscoped = embedded(json(await be.respond(method: "GET", url: url("/api/actor"), body: nil).data))
+        .first { $0["id"] as? Int == auditionActorId }
+    check("an unscoped actor carries no audition ids", unscoped?["auditionCharacterIds"] == nil)
+    check("an unscoped actor offers no `setAuditions`",
+          (unscoped?["_links"] as? [String: Any])?["setAuditions"] == nil)
+
+    let auditionChars = embedded(json(await be.respond(
+        method: "GET", url: url("/api/person?projectId=\(pid)"), body: nil).data))
+    guard auditionChars.count >= 2 else {
+        check("the project has characters to audition for", false)
+        print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
+        return
+    }
+    let castIdA = auditionChars[0]["id"] as! Int
+    let castIdB = auditionChars[1]["id"] as! Int
+
+    let setResponse = await be.respond(
+        method: "POST", url: url("/api/actor/\(auditionActorId)/auditions?projectId=\(pid)"),
+        body: body(["characterIds": [castIdA, castIdB]]))
+    check("set auditions -> 200", setResponse.status == 200, "got \(setResponse.status)")
+    let afterSet = Set(json(setResponse.data)["auditionCharacterIds"] as? [Int] ?? [])
+    check("the response reports the auditions just set", afterSet == Set([castIdA, castIdB]),
+          "got \(afterSet)")
+
+    // The change is durable: a fresh project-scoped read shows it.
+    let reReadActor = embedded(json(await be.respond(
+        method: "GET", url: url("/api/actor?projectId=\(pid)"), body: nil).data))
+        .first { $0["id"] as? Int == auditionActorId }
+    check("auditions persist on re-read",
+          Set(reReadActor?["auditionCharacterIds"] as? [Int] ?? []) == Set([castIdA, castIdB]))
+
+    // Sending a smaller set replaces wholesale rather than adding.
+    _ = await be.respond(method: "POST",
+                         url: url("/api/actor/\(auditionActorId)/auditions?projectId=\(pid)"),
+                         body: body(["characterIds": [castIdA]]))
+    let narrowed = embedded(json(await be.respond(
+        method: "GET", url: url("/api/actor?projectId=\(pid)"), body: nil).data))
+        .first { $0["id"] as? Int == auditionActorId }
+    check("a smaller set replaces the auditions wholesale",
+          Set(narrowed?["auditionCharacterIds"] as? [Int] ?? []) == Set([castIdA]))
+
+    // An empty list clears them.
+    _ = await be.respond(method: "POST",
+                         url: url("/api/actor/\(auditionActorId)/auditions?projectId=\(pid)"),
+                         body: body(["characterIds": [Int]()]))
+    let cleared = embedded(json(await be.respond(
+        method: "GET", url: url("/api/actor?projectId=\(pid)"), body: nil).data))
+        .first { $0["id"] as? Int == auditionActorId }
+    check("an empty list clears the auditions",
+          (cleared?["auditionCharacterIds"] as? [Int])?.isEmpty == true)
+
+    // Deleting the actor takes their auditions with them; setting auditions
+    // without a project is rejected.
+    check("setting auditions without a project -> 400",
+          await be.respond(method: "POST",
+                           url: url("/api/actor/\(auditionActorId)/auditions"),
+                           body: body(["characterIds": [castIdA]])).status == 400)
+    _ = await be.respond(method: "DELETE", url: url("/api/actor/\(auditionActorId)"), body: nil)
+
+}
+
+func checkUsers(root: [String: Any]) async {
     // --- USERS (admin) ---
     //
     // Managing accounts is an admin task, so the root advertises `users` only to
@@ -1033,14 +1124,13 @@ func run() async {
     check("an edit adds the newly granted role", editedUser["director"] as? Bool == true)
     check("an edit clears a role turned off", editedUser["viewCasting"] as? Bool == false)
 
-    let removed = await be.respond(method: "DELETE", url: url("/api/user/\(createdId)"), body: nil)
-    check("delete user -> 200", removed.status == 200, "got \(removed.status)")
+    let removedUser = await be.respond(method: "DELETE", url: url("/api/user/\(createdId)"), body: nil)
+    check("delete user -> 200", removedUser.status == 200, "got \(removedUser.status)")
     check("the deleted account is gone",
           !(await userList()).contains { $0["id"] as? Int == createdId })
     check("an admin deleting their own account -> 400",
           await be.respond(method: "DELETE", url: url("/api/user/1"), body: nil).status == 400)
 
-    print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 
 await run()
