@@ -969,6 +969,77 @@ func run() async {
     _ = await be.respond(method: "POST", url: url("/api/preferences/capitalization"),
                          body: body(["character": true]))
 
+    // --- USERS (admin) ---
+    //
+    // Managing accounts is an admin task, so the root advertises `users` only to
+    // one — the demo's single account stands in for that admin. What may be done
+    // to an account travels as links: every account offers `update`, but the
+    // signed-in admin's own account carries no `delete` (it cannot remove
+    // itself), and deleting it is refused server-side too.
+    check("root advertises `users` rel", links(root)["users"] != nil)
+
+    func userList() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/user"), body: nil).data))
+    }
+
+    let usersRoot = json(await be.respond(method: "GET", url: url("/api/user"), body: nil).data)
+    check("the user collection has a self link", links(usersRoot)["self"] != nil)
+    var accounts = embedded(usersRoot)
+    check("seeded accounts are present", accounts.count >= 2, "got \(accounts.count)")
+    check("an account reports whether it is enabled",
+          accounts.allSatisfy { $0["enabled"] != nil })
+
+    let selfAccount = accounts.first { $0["id"] as? Int == 1 }
+    check("the signed-in admin offers `update`",
+          (selfAccount?["_links"] as? [String: Any])?["update"] != nil)
+    check("the signed-in admin offers no `delete`",
+          (selfAccount?["_links"] as? [String: Any])?["delete"] == nil)
+    check("another account offers `delete`",
+          accounts.contains {
+              ($0["id"] as? Int) != 1 && (($0["_links"] as? [String: Any])?["delete"] != nil)
+          })
+
+    let accountCountBefore = accounts.count
+    let newAccount = await be.respond(method: "POST", url: url("/api/user"),
+                                      body: body(["username": "gale", "password": "s3cretpw",
+                                                  "firstName": "Gale", "lastName": "Ferris",
+                                                  "writer": true, "viewCasting": true]))
+    check("create user -> 200", newAccount.status == 200, "got \(newAccount.status)")
+    let createdUser = json(newAccount.data)
+    check("a created account returns an `update` link", links(createdUser)["update"] != nil)
+    check("a created account keeps the roles it was given",
+          createdUser["writer"] as? Bool == true && createdUser["viewCasting"] as? Bool == true)
+    check("a role not granted stays off", createdUser["admin"] as? Bool == false)
+    accounts = await userList()
+    check("the created account joins the list", accounts.count == accountCountBefore + 1,
+          "\(accountCountBefore) -> \(accounts.count)")
+
+    check("creating without a username -> 400",
+          await be.respond(method: "POST", url: url("/api/user"),
+                           body: body(["password": "s3cretpw", "firstName": "N", "lastName": "N"]))
+              .status == 400)
+    check("creating with a short password -> 400",
+          await be.respond(method: "POST", url: url("/api/user"),
+                           body: body(["username": "x", "password": "short",
+                                       "firstName": "N", "lastName": "N"])).status == 400)
+
+    let createdId = createdUser["id"] as? Int ?? 0
+    let edited = await be.respond(method: "PUT", url: url("/api/user/\(createdId)"),
+                                  body: body(["username": "gale", "firstName": "Gale",
+                                              "lastName": "Ferris", "writer": true,
+                                              "director": true, "viewCasting": false]))
+    check("edit user -> 200", edited.status == 200, "got \(edited.status)")
+    let editedUser = json(edited.data)
+    check("an edit adds the newly granted role", editedUser["director"] as? Bool == true)
+    check("an edit clears a role turned off", editedUser["viewCasting"] as? Bool == false)
+
+    let removed = await be.respond(method: "DELETE", url: url("/api/user/\(createdId)"), body: nil)
+    check("delete user -> 200", removed.status == 200, "got \(removed.status)")
+    check("the deleted account is gone",
+          !(await userList()).contains { $0["id"] as? Int == createdId })
+    check("an admin deleting their own account -> 400",
+          await be.respond(method: "DELETE", url: url("/api/user/1"), body: nil).status == 400)
+
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
 

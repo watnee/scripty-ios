@@ -157,6 +157,9 @@ actor DemoBackend {
         case (_, "api", "team"):
             return routeTeam(method: method, path: Array(path.dropFirst(2)),
                              query: query, fields: fields)
+        case (_, "api", "user"):
+            return routeUser(method: method, path: Array(path.dropFirst(2)),
+                             query: query, fields: fields)
         case (_, "api", "preferences"):
             return routePreferences(method: method, path: Array(path.dropFirst(2)),
                                     fields: fields)
@@ -2251,14 +2254,177 @@ actor DemoBackend {
         ]
     }
 
+    // MARK: - Users (admin)
+
+    private struct DemoUser {
+        var id: Int
+        var username: String
+        var firstName: String
+        var lastName: String
+        var team: String?
+        var admin: Bool
+        var director: Bool
+        var producer: Bool
+        var writer: Bool
+        var actor: Bool
+        var crew: Bool
+        var directorOfPhotography: Bool
+        var castingDirector: Bool
+        var viewCasting: Bool
+        var developer: Bool
+        var enabled: Bool
+    }
+
+    /// Seeded with the demo's own admin plus a couple of ordinary accounts, so
+    /// the list is not empty and the different role summaries are visible. The
+    /// admin (id 1) stands in for the signed-in user, so — like the server — it
+    /// carries no `delete` link: an admin cannot remove their own account.
+    private lazy var usersStore: [DemoUser] = [
+        DemoUser(id: 1, username: "demo", firstName: "Demo", lastName: "Admin",
+                 team: "Demo", admin: true, director: false, producer: false,
+                 writer: false, actor: false, crew: false,
+                 directorOfPhotography: false, castingDirector: false,
+                 viewCasting: false, developer: false, enabled: true),
+        DemoUser(id: 2, username: "wes", firstName: "Wes", lastName: "Halloran",
+                 team: "Demo", admin: false, director: true, producer: false,
+                 writer: true, actor: false, crew: false,
+                 directorOfPhotography: false, castingDirector: false,
+                 viewCasting: true, developer: false, enabled: true),
+        DemoUser(id: 3, username: "rin", firstName: "Rin", lastName: "Kobayashi",
+                 team: "Demo", admin: false, director: false, producer: false,
+                 writer: false, actor: true, crew: false,
+                 directorOfPhotography: false, castingDirector: false,
+                 viewCasting: false, developer: false, enabled: false),
+    ]
+    private lazy var nextUserId = 4
+
+    private func routeUser(method: String, path: [String],
+                           query: [String: String],
+                           fields: [String: Any]) -> (Int, Data) {
+        switch (method, path.count) {
+        case ("GET", 0):
+            return userCollection()
+        case ("POST", 0):
+            guard let username = (fields["username"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !username.isEmpty else {
+                return badRequest("username")
+            }
+            guard let password = fields["password"] as? String, password.count >= 8 else {
+                return badRequest("password")
+            }
+            var user = DemoUser(id: nextUserId, username: username,
+                                firstName: fields["firstName"] as? String ?? "",
+                                lastName: fields["lastName"] as? String ?? "",
+                                team: (fields["team"] as? String),
+                                admin: false, director: false, producer: false,
+                                writer: false, actor: false, crew: false,
+                                directorOfPhotography: false, castingDirector: false,
+                                viewCasting: false, developer: false, enabled: true)
+            applyRoles(&user, from: fields)
+            nextUserId += 1
+            usersStore.append(user)
+            return ok(userJSON(user))
+        default:
+            break
+        }
+
+        guard let id = path.first.flatMap(Int.init),
+              let index = usersStore.firstIndex(where: { $0.id == id }) else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("GET", nil):
+            return ok(userJSON(usersStore[index]))
+        case ("PUT", nil):
+            if let value = (fields["username"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                usersStore[index].username = value
+            }
+            if let value = fields["firstName"] as? String { usersStore[index].firstName = value }
+            if let value = fields["lastName"] as? String { usersStore[index].lastName = value }
+            if fields.keys.contains("team") { usersStore[index].team = fields["team"] as? String }
+            applyRoles(&usersStore[index], from: fields)
+            return ok(userJSON(usersStore[index]))
+        case ("DELETE", nil):
+            // The signed-in admin (id 1) cannot delete their own account, matching
+            // the server's guard.
+            guard id != 1 else {
+                return (400, (try? JSONSerialization.data(
+                    withJSONObject: ["message": "You cannot delete your own account."]))
+                    ?? Data("{}".utf8))
+            }
+            let removed = usersStore.remove(at: index)
+            return ok(userJSON(removed))
+        default:
+            return notFound()
+        }
+    }
+
+    private func applyRoles(_ user: inout DemoUser, from fields: [String: Any]) {
+        if let value = fields["admin"] as? Bool { user.admin = value }
+        if let value = fields["director"] as? Bool { user.director = value }
+        if let value = fields["producer"] as? Bool { user.producer = value }
+        if let value = fields["writer"] as? Bool { user.writer = value }
+        if let value = fields["actor"] as? Bool { user.actor = value }
+        if let value = fields["crew"] as? Bool { user.crew = value }
+        if let value = fields["directorOfPhotography"] as? Bool { user.directorOfPhotography = value }
+        if let value = fields["castingDirector"] as? Bool { user.castingDirector = value }
+        if let value = fields["viewCasting"] as? Bool { user.viewCasting = value }
+        if let value = fields["developer"] as? Bool { user.developer = value }
+    }
+
+    private func userCollection() -> (Int, Data) {
+        let items = usersStore
+            .sorted { ($0.firstName + $0.lastName)
+                .localizedCaseInsensitiveCompare($1.firstName + $1.lastName) == .orderedAscending }
+            .map { userJSON($0) }
+        return ok([
+            "_embedded": ["userResourceList": items],
+            "_links": ["self": link("/api/user")],
+        ])
+    }
+
+    private func userJSON(_ user: DemoUser) -> [String: Any] {
+        var links: [String: Any] = [
+            "self": link("/api/user/\(user.id)"),
+            "users": link("/api/user"),
+            "update": link("/api/user/\(user.id)"),
+        ]
+        // The signed-in admin's own account carries no delete link.
+        if user.id != 1 {
+            links["delete"] = link("/api/user/\(user.id)")
+        }
+        var json: [String: Any] = [
+            "id": user.id,
+            "username": user.username,
+            "firstName": user.firstName,
+            "lastName": user.lastName,
+            "admin": user.admin,
+            "director": user.director,
+            "producer": user.producer,
+            "writer": user.writer,
+            "actor": user.actor,
+            "crew": user.crew,
+            "directorOfPhotography": user.directorOfPhotography,
+            "castingDirector": user.castingDirector,
+            "viewCasting": user.viewCasting,
+            "developer": user.developer,
+            "enabled": user.enabled,
+            "_links": links,
+        ]
+        if let team = user.team { json["team"] = team }
+        return json
+    }
+
     private func rootJSON() -> [String: Any] {
-        // `teams` is advertised here as it is on the server for a user allowed
-        // to manage them; the demo's single account stands in for that admin.
+        // `teams` and `users` are advertised here as they are on the server for a
+        // user allowed to manage them; the demo's single account stands in for
+        // that admin.
         ["_links": ["self": link("/api"),
                     "projects": link("/api/project"),
                     "actors": link("/api/actor"),
                     "capitalizationPreferences": link("/api/preferences/capitalization"),
-                    "teams": link("/api/team")]]
+                    "teams": link("/api/team"),
+                    "users": link("/api/user")]]
     }
 
     private func projectJSON(_ project: DemoProject) -> [String: Any] {
