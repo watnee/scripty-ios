@@ -165,6 +165,24 @@ struct SongsView: View {
                     Label("Rename", systemImage: "pencil")
                 }
             }
+            if document.hasLink(.duplicate) {
+                Button {
+                    duplicate(document)
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+            }
+            if document.hasLink(.changeType) {
+                // Only ever a swap between the two kinds the picker shows, so
+                // it reads as one action rather than a type menu.
+                let other: DocumentType = document.kind == .song ? .notes : .song
+                Button {
+                    changeType(document, to: other)
+                } label: {
+                    Label(other == .song ? "Make a Song" : "Make a Note",
+                          systemImage: other == .song ? "music.note" : "note.text")
+                }
+            }
             if document.hasLink(.shareEmail) {
                 Button {
                     shareEmail = ""
@@ -284,6 +302,27 @@ struct SongsView: View {
         renamingDocument = nil
         guard !title.isEmpty else { return }
         Task { await model.renameDocument(document, title: title) }
+    }
+
+    private func duplicate(_ document: TextDocument) {
+        Task {
+            if await model.duplicateDocument(document) == nil {
+                statusMessage = model.errorMessage ?? "Could not duplicate \"\(document.displayTitle)\"."
+            }
+        }
+    }
+
+    private func changeType(_ document: TextDocument, to type: DocumentType) {
+        Task {
+            if await model.changeDocumentType(document, to: type) {
+                // It has left the list we are looking at, so follow it over
+                // rather than leaving the writer staring at an empty row.
+                listType = type
+            } else {
+                statusMessage = model.errorMessage
+                    ?? "Could not turn \"\(document.displayTitle)\" into a \(type == .song ? "song" : "note")."
+            }
+        }
     }
 
     private func moveDocuments(from source: IndexSet, to destination: Int) {

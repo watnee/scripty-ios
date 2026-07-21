@@ -1003,12 +1003,127 @@ func run() async {
                          body: body(["character": true]))
 
     checkCurieTolerance()
+    await checkDocumentCopyAndType(pid: pid)
+    await checkCommentCounts(pid: pid)
     await checkAuditions(pid: pid)
     await checkAccount(root: root)
     await checkUsers(root: root)
     await checkContactSuggestions(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
+}
+
+/// Which elements have discussion on them, in one call. The client paints a
+/// badge per element from this, so the shape is the contract: keyed by block id
+/// (as strings, since they are JSON object keys) and silent about the elements
+/// with nothing on them.
+func checkCommentCounts(pid: Int) async {
+    let collection = json(await be.respond(
+        method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data)
+    check("the block collection advertises `commentCounts`",
+          links(collection)["commentCounts"] != nil)
+    // Follow the advertised href rather than rebuilding the path, which is the
+    // whole point of the rel.
+    guard let href = (links(collection)["commentCounts"] as? [String: Any])?["href"] as? String,
+          let countsURL = URL(string: href),
+          let blockId = embedded(collection).first?["id"] as? Int else {
+        check("the commentCounts link is followable", false)
+        return
+    }
+
+    func counts() async -> [String: Any] {
+        json(await be.respond(method: "GET", url: countsURL, body: nil).data)["counts"]
+            as? [String: Any] ?? [:]
+    }
+
+    let before = await counts()
+    let started = before[String(blockId)] as? Int ?? 0
+    _ = await be.respond(method: "POST", url: url("/api/block/\(blockId)/comments"),
+                         body: body(["body": "One more thought."]))
+    let after = await counts()
+    check("a new comment raises that element's count",
+          after[String(blockId)] as? Int == started + 1,
+          "was \(started), now \(after[String(blockId)] as? Int ?? -1)")
+    check("the map is keyed by block id as a string",
+          after.keys.allSatisfy { Int($0) != nil }, "got \(after.keys.sorted())")
+
+    // An element nobody has commented on is absent, not zero — that absence is
+    // what keeps the payload small enough to fetch with the script.
+    let quiet = embedded(collection).compactMap { $0["id"] as? Int }
+        .first { after[String($0)] == nil }
+    check("an uncommented element is absent rather than zero", quiet != nil)
+
+    // Put the count back so a re-run starts from the same place.
+    let thread = embedded(json(await be.respond(
+        method: "GET", url: url("/api/block/\(blockId)/comments"), body: nil).data))
+    if let mine = thread.last?["id"] as? Int {
+        _ = await be.respond(method: "DELETE", url: url("/api/block/comments/\(mine)"), body: nil)
+    }
+    check("removing it lowers the count again",
+          await counts()[String(blockId)] as? Int ?? 0 == started)
+}
+
+/// Copying a song/note and switching it between song and note. Both rels are
+/// advertised on the document itself for an editor, and both are camel-cased
+/// names over kebab-cased paths, so these pin the rel names rather than the
+/// URLs they happen to point at.
+func checkDocumentCopyAndType(pid: Int) async {
+    let made = json(await be.respond(
+        method: "POST", url: url("/api/document"),
+        body: body(["projectId": pid, "title": "Overture",
+                    "documentType": "SONG", "content": "First line.\nSecond line."])).data)
+    guard let id = made["id"] as? Int else {
+        check("a document to copy was created", false)
+        return
+    }
+    check("a document advertises `duplicate`", links(made)["duplicate"] != nil)
+    check("a document advertises `changeType`", links(made)["changeType"] != nil)
+
+    // --- duplicate ---
+    let copied = await be.respond(method: "POST", url: url("/api/document/\(id)/duplicate"), body: nil)
+    check("duplicate -> 201", copied.status == 201, "got \(copied.status)")
+    let copy = json(copied.data)
+    check("the copy is titled \"… (copy)\"", copy["title"] as? String == "Overture (copy)",
+          "got \(copy["title"] as? String ?? "nil")")
+    check("the copy carries the content over",
+          copy["content"] as? String == "First line.\nSecond line.")
+    check("the copy is a new document", (copy["id"] as? Int) != id)
+    check("the copy keeps the original's type", copy["documentType"] as? String == "SONG")
+    let listed = embedded(json(await be.respond(
+        method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data))
+        .compactMap { $0["id"] as? Int }
+    check("both the original and its copy are listed",
+          listed.contains(id) && listed.contains(copy["id"] as? Int ?? -1))
+    check("duplicating an unknown document -> 404",
+          await be.respond(method: "POST", url: url("/api/document/987654/duplicate"),
+                           body: nil).status == 404)
+
+    // --- changeType ---
+    let toNote = json(await be.respond(
+        method: "POST", url: url("/api/document/\(id)/change-type"),
+        body: body(["type": "NOTES"])).data)
+    check("change-type turns the song into a note",
+          toNote["documentType"] as? String == "NOTES",
+          "got \(toNote["documentType"] as? String ?? "nil")")
+    check("and relabels it", toNote["documentTypeLabel"] as? String == "Notes")
+    check("a note drops the song-only rels",
+          links(toNote)["songBlocks"] == nil && links(toNote)["exportSongTxt"] == nil)
+    let backToSong = json(await be.respond(
+        method: "POST", url: url("/api/document/\(id)/change-type"),
+        body: body(["type": "SONG"])).data)
+    check("change-type turns it back into a song",
+          backToSong["documentType"] as? String == "SONG")
+    check("the song-only rels come back", links(backToSong)["songBlocks"] != nil)
+    check("change-type keeps the content", backToSong["content"] as? String == "First line.\nSecond line.")
+    check("change-type with no type -> 400",
+          await be.respond(method: "POST", url: url("/api/document/\(id)/change-type"),
+                           body: body(["type": ""])).status == 400)
+
+    // Leave the project as it was found.
+    _ = await be.respond(method: "DELETE", url: url("/api/document/\(id)"), body: nil)
+    if let copyId = copy["id"] as? Int {
+        _ = await be.respond(method: "DELETE", url: url("/api/document/\(copyId)"), body: nil)
+    }
 }
 
 /// Invite autofill hangs off one rel, and the rel's spelling is the whole

@@ -85,6 +85,12 @@ struct ReorderDocumentsCommand: Encodable {
     var orderedIds: [Int]
 }
 
+/// Switch a document between song and note. The server takes the raw type
+/// ("SONG" / "NOTES") and normalizes anything else to NOTES.
+struct ChangeDocumentTypeCommand: Encodable {
+    var type: String
+}
+
 /// Insert a document's content into the screenplay as blocks.
 /// Omitting `afterBlockId` appends after the last block; `asType` overrides
 /// the default Fountain type (LYRICS for songs).

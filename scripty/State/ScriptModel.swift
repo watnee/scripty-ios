@@ -30,6 +30,9 @@ final class ScriptModel {
     private(set) var canViewCharacters = true
     private(set) var documents: [TextDocument] = []
     private(set) var documentsLinks = HALLinks()
+    /// Comments per element, keyed by block id. Empty until the server offers
+    /// the rel, so a deployment that doesn't simply shows no badges.
+    private(set) var commentCounts: [Int: Int] = [:]
     private(set) var undoRedo: UndoRedoStatus?
     private(set) var isLoading = false
     var errorMessage: String?
@@ -113,6 +116,27 @@ final class ScriptModel {
         } catch {
             report(error)
         }
+        await loadCommentCounts()
+    }
+
+    /// Fetches how many comments each element carries, so the script can mark
+    /// the discussed lines. Advertised on the block collection, so this is a
+    /// no-op against a server that doesn't offer it — and a failure is silent:
+    /// a missing badge is not worth an error banner over the writer's script.
+    func loadCommentCounts() async {
+        guard let link = blocksLinks[.commentCounts] else {
+            commentCounts = [:]
+            return
+        }
+        if let counts: BlockCommentCounts = try? await app.client.fetch(from: link) {
+            commentCounts = counts.byBlockId
+        }
+    }
+
+    /// How many comments one element carries; zero when it has none, since the
+    /// server leaves the uncommented elements out of the map entirely.
+    func commentCount(for block: Block) -> Int {
+        commentCounts[block.id] ?? 0
     }
 
     /// Replace the script with a block collection the server just returned.
@@ -752,6 +776,40 @@ final class ScriptModel {
             }
         }
         documents.sort { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
+    }
+
+    /// Copies a song or note. The server titles the copy "… (copy)" and puts it
+    /// last, so the list is reloaded rather than patched locally.
+    @discardableResult
+    func duplicateDocument(_ document: TextDocument) async -> TextDocument? {
+        guard let link = document.link(.duplicate) else { return nil }
+        do {
+            let copy: TextDocument = try await app.client.fetch(from: link, method: "POST")
+            await loadDocuments()
+            errorMessage = nil
+            return copy
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Switches a document between song and note. Changing the type changes
+    /// which editor opens and which affordances the server advertises next, so
+    /// the reload is what refreshes the row's links.
+    @discardableResult
+    func changeDocumentType(_ document: TextDocument, to type: DocumentType) async -> Bool {
+        guard let link = document.link(.changeType) else { return false }
+        do {
+            let _: TextDocument = try await app.client.fetch(
+                from: link, method: "POST", body: ChangeDocumentTypeCommand(type: type.rawValue))
+            await loadDocuments()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            return false
+        }
     }
 
     func deleteDocument(_ document: TextDocument) async {

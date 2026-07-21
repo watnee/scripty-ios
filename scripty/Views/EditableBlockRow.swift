@@ -50,6 +50,9 @@ struct EditableBlockRow: View {
         var parts = [block.blockType.label]
         if block.isPinned { parts.append("Pinned") }
         if block.isBookmarked { parts.append("Bookmarked") }
+        if let comments = CommentCountBadge.spokenLabel(model.commentCount(for: block)) {
+            parts.append(comments)
+        }
         return parts.joined(separator: ", ")
     }
 
@@ -113,12 +116,17 @@ struct EditableBlockRow: View {
     @ViewBuilder
     private var badges: some View {
         HStack(spacing: 4) {
-            if block.isPinned { Image(systemName: "pin.fill") }
-            if block.isBookmarked { Image(systemName: "bookmark.fill") }
+            // The writer's own marks share one tint; the comment badge brings
+            // its own, since it is other people's.
+            HStack(spacing: 4) {
+                if block.isPinned { Image(systemName: "pin.fill") }
+                if block.isBookmarked { Image(systemName: "bookmark.fill") }
+            }
+            .foregroundStyle(.orange)
+            CommentCountBadge(count: model.commentCount(for: block))
         }
         .font(.caption2)
-        .foregroundStyle(.orange)
-        // Both badges are already spoken as part of the row's label.
+        // Every badge here is already spoken as part of the row's label.
         .accessibilityHidden(true)
     }
 

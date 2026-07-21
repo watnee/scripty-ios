@@ -651,11 +651,16 @@ actor DemoBackend {
             break
         }
 
-        // `/api/block/trash…` and `/api/block/comments/{id}` are siblings of
-        // the block resources, not block ids, so they are picked off before the
-        // numeric lookup.
+        // `/api/block/trash…`, `/api/block/comments/{id}` and
+        // `/api/block/comment-counts` are siblings of the block resources, not
+        // block ids, so they are picked off before the numeric lookup.
         if path.first == "trash" {
             return routeBlockTrash(method: method, path: Array(path.dropFirst()), query: query)
+        }
+        if path.first == "comment-counts", method == "GET" {
+            guard let projectId = query["projectId"].flatMap(Int.init),
+                  blocks[projectId] != nil else { return badRequest("projectId") }
+            return commentCounts(projectId)
         }
         if path.first == "comments", path.count == 2, method == "DELETE",
            let commentId = Int(path[1]) {
@@ -896,6 +901,22 @@ actor DemoBackend {
             return insertDocument(document: documents[projectId]![index],
                                   afterBlockId: fields["afterBlockId"] as? Int,
                                   asType: fields["asType"] as? String)
+        case ("POST", "duplicate"):
+            // Content only, as on the server: a song's lyric blocks and
+            // editions are not carried over to the copy.
+            let source = documents[projectId]![index]
+            let copy = addDocument(projectId: projectId, title: copyTitle(source.title),
+                                   type: source.documentType, content: source.content)
+            return created(documentJSON(copy, includeContent: true))
+        case ("POST", "change-type"):
+            // A blank type is the only rejection; the server maps any other
+            // unrecognized value onto SONG rather than failing.
+            guard let type = normalizeDocumentType(fields["type"] as? String) else {
+                return badRequest("type")
+            }
+            documents[projectId]?[index].documentType = type
+            documents[projectId]?[index].updatedAt = .now
+            return ok(documentJSON(documents[projectId]![index], includeContent: true))
         case ("POST", "share-email"):
             let email = (fields["email"] as? String) ?? ""
             if email.isBlank { return badRequest("email") }
@@ -1019,6 +1040,10 @@ actor DemoBackend {
             "update": link("/api/document/\(document.id)"),
             "delete": link("/api/document/\(document.id)"),
             "insert": link("/api/document/\(document.id)/insert"),
+            // Both are editor affordances on the document itself; the demo user
+            // always has edit rights, so they are unconditional here.
+            "duplicate": link("/api/document/\(document.id)/duplicate"),
+            "changeType": link("/api/document/\(document.id)/change-type"),
         ]
         if isSong {
             links["shareEmail"] = link("/api/document/\(document.id)/share-email")
@@ -1056,6 +1081,17 @@ actor DemoBackend {
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespaces)
         return flattened.count > 90 ? String(flattened.prefix(90)) + "…" : flattened
+    }
+
+    /// The title the server gives a duplicate: the original with " (copy)"
+    /// appended, trimmed to fit the column if that would overflow it.
+    private func copyTitle(_ title: String) -> String {
+        let suffix = " (copy)"
+        var base = title.isBlank ? "Untitled" : title.trimmingCharacters(in: .whitespaces)
+        if base.count + suffix.count > 200 {
+            base = String(base.prefix(200 - suffix.count)).trimmingCharacters(in: .whitespaces)
+        }
+        return base + suffix
     }
 
     private func normalizeDocumentType(_ type: String?) -> String? {
@@ -1346,6 +1382,24 @@ actor DemoBackend {
                 "self": link("/api/block/\(blockId)/comments"),
                 "addComment": link("/api/block/\(blockId)/comments"),
                 "block": link("/api/block/\(blockId)"),
+            ],
+        ])
+    }
+
+    /// Comments per element for a whole project, keyed by block id. Elements
+    /// with none are left out entirely rather than sent as zero — that absence
+    /// is the contract, since it is what keeps the payload small enough to
+    /// fetch alongside the script.
+    private func commentCounts(_ projectId: Int) -> (Int, Data) {
+        var counts: [String: Int] = [:]
+        for comment in comments where ownsBlock(comment.blockId, projectId: projectId) {
+            counts[String(comment.blockId), default: 0] += 1
+        }
+        return ok([
+            "counts": counts,
+            "_links": [
+                "self": link("/api/block/comment-counts?projectId=\(projectId)"),
+                "blocks": link("/api/block?projectId=\(projectId)"),
             ],
         ])
     }
@@ -2627,6 +2681,10 @@ actor DemoBackend {
             links["bulkFormat"] = link("/api/block/bulk/format")
             links["bulkDelete"] = link("/api/block/bulk/delete")
             links["bulkReplace"] = link("/api/block/bulk/replace")
+            // Like the bulk operations, this needs a script to act on — but
+            // unlike them it is offered to readers too on the real server,
+            // which the demo's always-an-editor user cannot show.
+            links["commentCounts"] = link("/api/block/comment-counts?projectId=\(projectId)")
         }
         // Offered even for an empty script — that is exactly when everything
         // has just been deleted.
@@ -3024,6 +3082,12 @@ actor DemoBackend {
 
     private func ok(_ object: [String: Any]) -> (Int, Data) {
         ((try? JSONSerialization.data(withJSONObject: object)).map { (200, $0) }
+            ?? (500, Data("{}".utf8)))
+    }
+
+    /// 201 with the new resource, for the routes the server answers that way.
+    private func created(_ object: [String: Any]) -> (Int, Data) {
+        ((try? JSONSerialization.data(withJSONObject: object)).map { (201, $0) }
             ?? (500, Data("{}".utf8)))
     }
 

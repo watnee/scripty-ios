@@ -123,7 +123,12 @@ struct ScriptView: View {
                       contactsSource: model.project.link(.contactSuggestions),
                       projectTitle: model.project.displayTitle)
         }
-        .sheet(item: $commentTarget) { block in
+        .sheet(item: $commentTarget, onDismiss: {
+            // The thread may have gained or lost comments, so repaint the
+            // badge. Only the counts — reloading the script would throw away
+            // whatever the writer has typed since.
+            Task { await model.loadCommentCounts() }
+        }) { block in
             // Presented from the link the block advertised, so the thread
             // cannot open for an element the server never offered one for.
             if let source = block.link(.comments) {
@@ -380,7 +385,7 @@ struct ScriptView: View {
                 commentTarget = commented
             }
         } else {
-            BlockRowView(block: block)
+            BlockRowView(block: block, commentCount: model.commentCount(for: block))
                 .padding(.vertical, 4)
         }
     }

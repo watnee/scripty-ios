@@ -85,6 +85,13 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     /// collection for an editor. The client posts the ids in their new sequence.
     static let reorder = Rel("reorder")
 
+    /// Copy a song or note into a new document titled "… (copy)", and switch a
+    /// document between song and note. Both are advertised on the document
+    /// itself for an editor. Note the rel names are camel-cased while the paths
+    /// they point at are kebab-cased — the name is what counts here.
+    static let duplicate = Rel("duplicate")
+    static let changeType = Rel("changeType")
+
     // Version history. The server has offered these all along.
     static let versions = Rel("versions")
     static let restore = Rel("restore")
@@ -98,6 +105,11 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     // Collaboration.
     static let comments = Rel("comments")
     static let addComment = Rel("addComment")
+
+    /// How many comments each element carries, for the whole script at once.
+    /// Advertised on a non-empty block collection, and to readers as well as
+    /// editors — seeing where the discussion is needs only read access.
+    static let commentCounts = Rel("commentCounts")
     static let activity = Rel("activity")
     static let invitations = Rel("invitations")
     static let sendInvitation = Rel("sendInvitation")

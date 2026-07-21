@@ -69,8 +69,43 @@ extension View {
     }
 }
 
+/// "3 comments on this line", as a bubble and a number beside the pin and
+/// bookmark badges. Draws nothing at all when the count is zero, which is most
+/// elements — and is also what a server that never offered the count looks
+/// like, so the row degrades to how it looked before.
+///
+/// Deliberately not tinted like the pin and bookmark: those are marks the
+/// writer put on the line themselves, while this is other people's.
+struct CommentCountBadge: View {
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Label("\(count)", systemImage: "bubble.left.fill")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// How the badge reads aloud, or nil when there is nothing to say. Rows
+    /// hide the badges from VoiceOver and fold them into the row's own label
+    /// instead, so a screen reader hears one element per line rather than
+    /// several.
+    static func spokenLabel(_ count: Int) -> String? {
+        switch count {
+        case ..<1: return nil
+        case 1: return "1 comment"
+        default: return "\(count) comments"
+        }
+    }
+}
+
 struct BlockRowView: View {
     let block: Block
+    /// How many comments sit on this element. Defaults to none so the row can
+    /// still be rendered somewhere the counts aren't loaded — the bulk-action
+    /// preview strip, for one.
+    var commentCount: Int = 0
 
     @Environment(\.scriptTextScale) private var textScale
 
@@ -115,6 +150,9 @@ struct BlockRowView: View {
         }
         if block.isPinned { parts.append("Pinned") }
         if block.isBookmarked { parts.append("Bookmarked") }
+        if let comments = CommentCountBadge.spokenLabel(commentCount) {
+            parts.append(comments)
+        }
         return parts.joined(separator: ". ")
     }
 
@@ -230,15 +268,20 @@ struct BlockRowView: View {
     @ViewBuilder
     private var badges: some View {
         HStack(spacing: 4) {
-            if block.isPinned {
-                Image(systemName: "pin.fill")
+            // The writer's own marks share one tint; the comment badge brings
+            // its own, since it is other people's.
+            HStack(spacing: 4) {
+                if block.isPinned {
+                    Image(systemName: "pin.fill")
+                }
+                if block.isBookmarked {
+                    Image(systemName: "bookmark.fill")
+                }
             }
-            if block.isBookmarked {
-                Image(systemName: "bookmark.fill")
-            }
+            .foregroundStyle(.orange)
+            CommentCountBadge(count: commentCount)
         }
         .font(.caption2)
-        .foregroundStyle(.orange)
     }
 
     /// Character cues carry the speaker name as content; fall back to the

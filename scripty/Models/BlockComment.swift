@@ -43,3 +43,26 @@ struct BlockComment: Decodable, Identifiable, Hashable, HALResource {
 struct AddCommentCommand: Encodable {
     var body: String
 }
+
+/// How many comments sit on each element of a project — one call for the whole
+/// script, so a badge can be painted without asking about every line.
+///
+/// The server keys the map by block id, and JSON object keys are strings, so
+/// they are read back as ints here. Elements with nothing on them are absent
+/// rather than zero, which is what makes the payload small enough to fetch
+/// alongside the script.
+struct BlockCommentCounts: Decodable {
+    var byBlockId: [Int: Int] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case counts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decodeIfPresent([String: Int].self, forKey: .counts) ?? [:]
+        byBlockId = raw.reduce(into: [:]) { result, pair in
+            if let id = Int(pair.key) { result[id] = pair.value }
+        }
+    }
+}
