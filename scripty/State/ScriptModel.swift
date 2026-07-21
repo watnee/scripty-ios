@@ -823,6 +823,32 @@ final class ScriptModel {
         }
     }
 
+    /// Whether a selection of songs can be sent to the trash in one call —
+    /// advertised on the collection for an editor of a project that has songs,
+    /// so it doubles as the "may select several" gate.
+    var canBulkDeleteDocuments: Bool { documentsLinks.contains(.bulkDelete) }
+
+    /// Trashes several songs at once. The server answers with what is left, so
+    /// the list settles from its reply rather than from local guesswork about
+    /// which of the chosen ids it accepted — a note caught in the selection is
+    /// skipped there, not here.
+    @discardableResult
+    func bulkDeleteDocuments(_ ids: [Int]) async -> Bool {
+        guard let link = documentsLinks[.bulkDelete], !ids.isEmpty else { return false }
+        do {
+            let collection: HALCollection<TextDocument> = try await app.client.fetch(
+                from: link, method: "POST", body: BulkDeleteDocumentsCommand(ids: ids))
+            documents = collection.items.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
+            documentsLinks = collection.links
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            await loadDocuments()   // fall back to the list the server kept
+            return false
+        }
+    }
+
     /// Inserts a document into the screenplay as blocks; returns the count.
     @discardableResult
     func insertDocument(_ document: TextDocument, afterBlockId: Int? = nil, asType: String? = nil) async -> Int? {
@@ -938,6 +964,19 @@ final class ScriptModel {
         ]
         return all.compactMap { rel, label, ext in
             documentsLinks[rel].map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
+        }
+    }
+
+    /// The same songbook narrowed to the chosen songs. The server's songbook
+    /// endpoint reads an `ids` list — the rel documents it, and the web's own
+    /// export menu appends the checked ids to the very same href — so a
+    /// selection is a query on the advertised link rather than a second rel.
+    func songbookExportOptions(for ids: [Int]) -> [ExportOption] {
+        guard !ids.isEmpty else { return songbookExportOptions }
+        let list = ids.map(String.init).joined(separator: ",")
+        return songbookExportOptions.map {
+            ExportOption(rel: $0.rel, label: $0.label, fileExtension: $0.fileExtension,
+                         link: $0.link.addingQuery(["ids": list]))
         }
     }
 

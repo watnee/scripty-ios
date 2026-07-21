@@ -1083,6 +1083,7 @@ func run() async {
     await checkBundleExports(pid: pid)
     await checkSongTrashAndHistory(pid: pid)
     await checkProjectAccess(pid: pid)
+    await checkSongSelection(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
@@ -1654,6 +1655,71 @@ func checkProjectAccess(pid: Int) async {
     // two people into one in the list.
     let names = people.compactMap { $0["displayName"] as? String }
     check("names are unique enough to identify a row", Set(names).count == names.count)
+}
+
+/// Acting on several songs at once, the way the web list's checkbox column
+/// does: a songbook of just the ticked songs, and a bulk delete that puts them
+/// in the trash. The narrowing rides on the songbook link's own `ids`
+/// parameter rather than on a second rel, so the check follows the advertised
+/// href and adds ids to it exactly as the client does.
+func checkSongSelection(pid: Int) async {
+    func documents() async -> [String: Any] {
+        json(await be.respond(method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data)
+    }
+    func makeSong(_ title: String) async -> Int? {
+        json(await be.respond(method: "POST", url: url("/api/document"),
+                              body: body(["projectId": pid, "title": title,
+                                          "documentType": "SONG",
+                                          "content": title + " lyric"])).data)["id"] as? Int
+    }
+
+    guard let keep = await makeSong("Selection Keeper"),
+          let drop = await makeSong("Selection Goner") else {
+        check("two songs to select between", false)
+        return
+    }
+
+    let collection = await documents()
+    check("the document collection advertises `bulkDelete`", links(collection)["bulkDelete"] != nil,
+          "got \(links(collection).keys.sorted())")
+
+    // --- a songbook of the selection only ---
+    if let href = (links(collection)["exportSongsTxt"] as? [String: Any])?["href"] as? String,
+       let narrowed = URL(string: href + "&ids=\(keep)") {
+        let text = String(data: await be.respond(method: "GET", url: narrowed, body: nil).data,
+                          encoding: .utf8) ?? ""
+        check("a songbook of one song holds it", text.contains("Selection Keeper"))
+        check("and holds nothing else", !text.contains("Selection Goner"))
+    } else {
+        check("the songbook link takes an ids list", false)
+    }
+
+    // --- deleting a selection ---
+    guard let deleteHref = (links(collection)["bulkDelete"] as? [String: Any])?["href"] as? String,
+          let deleteURL = URL(string: deleteHref) else {
+        check("the bulkDelete link is followable", false)
+        return
+    }
+    check("an empty selection -> 400",
+          await be.respond(method: "POST", url: deleteURL, body: body(["ids": [Int]()])).status == 400)
+
+    let left = json(await be.respond(method: "POST", url: deleteURL,
+                                     body: body(["ids": [drop]])).data)
+    let titles = embedded(left).compactMap { $0["title"] as? String }
+    check("the answer is what is left of the collection",
+          titles.contains("Selection Keeper") && !titles.contains("Selection Goner"),
+          "got \(titles)")
+    check("what is left still advertises the collection's links",
+          links(left)["bulkDelete"] != nil && links(left)["reorder"] != nil)
+
+    // Deleted, not destroyed: the trash is where the web's bulk delete puts
+    // them too, and the client offers a restore from there.
+    let trash = json(await be.respond(
+        method: "GET", url: url("/api/document/trash?projectId=\(pid)"), body: nil).data)
+    check("the deleted song is in the trash",
+          embedded(trash).contains { $0["title"] as? String == "Selection Goner" })
+
+    _ = await be.respond(method: "DELETE", url: url("/api/document/\(keep)"), body: nil)
 }
 
 await run()

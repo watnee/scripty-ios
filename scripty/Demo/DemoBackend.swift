@@ -887,11 +887,18 @@ actor DemoBackend {
         }
 
         // …as is the songbook, which exports the collection rather than any one
-        // document in it.
+        // document in it. An `ids` list narrows it to a selection, the way the
+        // web's export menu does when songs are checked.
         if method == "GET", path.first == "export-songs" {
             guard let projectId = query["projectId"].flatMap(Int.init),
                   documents[projectId] != nil else { return badRequest("projectId") }
-            return demoSongbookExport(projectId: projectId, format: query["format"] ?? "txt")
+            return demoSongbookExport(projectId: projectId, format: query["format"] ?? "txt",
+                                      ids: idList(query["ids"]))
+        }
+
+        // …and so is the bulk delete, which trashes a selection of songs.
+        if method == "POST", path.first == "bulk", path.dropFirst().first == "delete" {
+            return bulkDeleteDocuments(query: query, fields: fields)
         }
 
         guard let id = path.first.flatMap(Int.init),
@@ -974,6 +981,39 @@ actor DemoBackend {
                    "_links": documentCollectionLinks(projectId: projectId)])
     }
 
+    /// Trashes several songs at once, skipping anything that is not a song of
+    /// this project — a mixed selection takes the songs and leaves the notes,
+    /// as the server's own bulk delete does. Answers with what is left.
+    private func bulkDeleteDocuments(query: [String: String], fields: [String: Any]) -> (Int, Data) {
+        guard let projectId = query["projectId"].flatMap(Int.init),
+              documents[projectId] != nil else { return badRequest("projectId") }
+        let ids = (fields["ids"] as? [Any])?.compactMap { $0 as? Int } ?? []
+        guard !ids.isEmpty else { return badRequest("ids") }
+        var deleted = 0
+        for id in Set(ids) {
+            guard let index = documents[projectId]?.firstIndex(where: {
+                $0.id == id && $0.documentType == "SONG"
+            }) else { continue }
+            if let removed = documents[projectId]?.remove(at: index) {
+                deletedDocuments[projectId, default: []].append(
+                    DeletedDemoDocument(document: removed, deletedAt: Date()))
+                deleted += 1
+            }
+        }
+        guard deleted > 0 else { return badRequest("ids") }
+        let items = (documents[projectId] ?? [])
+            .sorted { $0.sortOrder < $1.sortOrder }
+            .map { documentJSON($0, includeContent: false) }
+        return ok(["_embedded": ["textDocumentResourceList": items],
+                   "_links": documentCollectionLinks(projectId: projectId)])
+    }
+
+    /// The ids of a comma-separated query value, as Spring reads a `List<Integer>`
+    /// parameter.
+    private func idList(_ value: String?) -> [Int] {
+        (value ?? "").split(separator: ",").compactMap { Int($0) }
+    }
+
     /// The links a project's document collection carries. The songbook exports
     /// appear only where there is a song to put in the book, matching the
     /// server, and sit outside the edit gate because exporting is a read.
@@ -990,6 +1030,10 @@ actor DemoBackend {
                                   ("exportSongsDocx", "docx"), ("exportSongsEpub", "epub")] {
                 links[rel] = link("/api/document/export-songs?projectId=\(projectId)&format=\(format)")
             }
+            // Deleting a selection is songs-only and an edit, so it rides with
+            // the songbook's condition but inside the edit gate — which the
+            // demo is always on the right side of.
+            links["bulkDelete"] = link("/api/document/bulk/delete?projectId=\(projectId)")
         }
         return links
     }
@@ -1009,10 +1053,12 @@ actor DemoBackend {
 
     /// Every song in a project, one after another — the songbook the web's
     /// Export menu downloads. Same shortcut as the single-song export: the
-    /// point is that the rel resolves and a file comes back.
-    private func demoSongbookExport(projectId: Int, format: String) -> (Int, Data) {
+    /// point is that the rel resolves and a file comes back. A non-empty `ids`
+    /// list narrows the book to those songs, keeping the project's order.
+    private func demoSongbookExport(projectId: Int, format: String, ids: [Int] = []) -> (Int, Data) {
+        let chosen = Set(ids)
         let songs = (documents[projectId] ?? [])
-            .filter { $0.documentType == "SONG" }
+            .filter { $0.documentType == "SONG" && (chosen.isEmpty || chosen.contains($0.id)) }
             .sorted { $0.sortOrder < $1.sortOrder }
         let title = projects.first { $0.id == projectId }?.title ?? "Songs"
         switch format {

@@ -7,6 +7,10 @@
 //  screenplay, share a song by email, and import from a file. Every
 //  affordance is gated on the links the server advertised.
 //
+//  Edit mode also selects: several songs can be trashed, or exported as a
+//  songbook of just those songs, which is what the web list's checkbox column
+//  is for. Notes have no checkboxes there and none here.
+//
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -25,6 +29,12 @@ struct SongsView: View {
     /// The finished song export, waiting for the system share sheet.
     @State private var exportedSong: ExportedSong?
     @State private var showingImporter = false
+    /// The songs ticked in edit mode, by id. Edit mode is held here rather
+    /// than left to the environment so leaving it can drop the selection —
+    /// otherwise the actions bar would outlive the ticks that filled it.
+    @State private var selection = Set<Int>()
+    @State private var editMode: EditMode = .inactive
+    @State private var confirmingBulkDelete = false
     /// Presented from the link the document collection advertised.
     @State private var trashLink: HALLink?
     @State private var isLoading = false
@@ -38,9 +48,22 @@ struct SongsView: View {
         listType == .song ? model.songs : model.notes
     }
 
+    /// Selecting several is a song affordance: the bulk delete is advertised
+    /// only where there is a song to delete, and the songbook is the only
+    /// export a selection can feed.
+    private var canSelect: Bool {
+        listType == .song && (model.canBulkDeleteDocuments || !model.songbookExportOptions.isEmpty)
+    }
+
+    /// The selection in list order, so a songbook of it reads in the order the
+    /// writer arranged rather than the order rows happened to be tapped.
+    private var selectedDocuments: [TextDocument] {
+        shown.filter { selection.contains($0.id) }
+    }
+
     var body: some View {
         NavigationStack {
-            List {
+            List(selection: $selection) {
                 ForEach(shown) { document in
                     row(for: document)
                 }
@@ -60,6 +83,13 @@ struct SongsView: View {
             .toolbar { toolbarContent }
             .task { await reload() }
             .refreshable { await reload() }
+            // Songs and notes are two lists, so a selection made in one has no
+            // meaning in the other.
+            .onChange(of: listType) { _, _ in selection.removeAll() }
+            .onChange(of: editMode) { _, mode in
+                if !mode.isEditing { selection.removeAll() }
+            }
+            .environment(\.editMode, $editMode)
             .fileImporter(isPresented: $showingImporter,
                           allowedContentTypes: importTypes,
                           allowsMultipleSelection: false) { result in
@@ -105,6 +135,13 @@ struct SongsView: View {
                 Button("Send") { commitShare() }
             } message: {
                 Text("Send the lyrics to a collaborator.")
+            }
+            .alert("Delete Songs", isPresented: $confirmingBulkDelete) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) { bulkDelete() }
+            } message: {
+                Text("Move \(selection.count) \(selection.count == 1 ? "song" : "songs") "
+                     + "to the trash. They can be restored from there.")
             }
             .alert("Songs & Notes",
                    isPresented: Binding(get: { statusMessage != nil },
@@ -243,11 +280,35 @@ struct SongsView: View {
         ToolbarItem(placement: .cancellationAction) {
             Button("Done") { dismiss() }
         }
-        // Only worth entering edit mode when there is an order to change and
-        // more than one item to move.
-        if model.canReorderDocuments && shown.count > 1 {
+        // Edit mode is worth entering when there is an order to change or a
+        // selection to make, and either way only with more than one row.
+        if (model.canReorderDocuments || canSelect) && shown.count > 1 {
             ToolbarItem(placement: .primaryAction) {
                 EditButton()
+            }
+        }
+        // What the selection can be done to, shown only once something is
+        // ticked — an empty bar under a list nobody is selecting from is noise.
+        if editMode.isEditing && !selection.isEmpty {
+            ToolbarItemGroup(placement: .bottomBar) {
+                if model.canBulkDeleteDocuments {
+                    Button(role: .destructive) {
+                        confirmingBulkDelete = true
+                    } label: {
+                        Label("Delete \(selection.count)", systemImage: "trash")
+                    }
+                }
+                Spacer()
+                let exports = model.songbookExportOptions(for: selectedDocuments.map(\.id))
+                if !exports.isEmpty {
+                    Menu {
+                        ForEach(exports) { option in
+                            Button(option.label) { exportSongbook(option, of: selectedDocuments) }
+                        }
+                    } label: {
+                        Label("Export \(selection.count)…", systemImage: "square.and.arrow.up")
+                    }
+                }
             }
         }
         // The whole songbook in one file. Exporting is a read, so this is
@@ -357,15 +418,35 @@ struct SongsView: View {
     }
 
     /// The songbook is named after the project, not after any one song, since
-    /// that is what the file holds.
-    private func exportSongbook(_ option: ScriptModel.ExportOption) {
-        let name = model.project.displayTitle.isEmpty ? "songs" : model.project.displayTitle + " Songs"
+    /// that is what the file holds — unless the writer picked a single song,
+    /// where its own title says more than "Project Songs" would.
+    private func exportSongbook(_ option: ScriptModel.ExportOption,
+                                of selected: [TextDocument] = []) {
+        let project = model.project.displayTitle.isEmpty ? "songs" : model.project.displayTitle + " Songs"
+        let name = selected.count == 1 ? selected[0].displayTitle : project
         Task {
             do {
                 let url = try await model.downloadExport(option, named: name)
                 exportedSong = ExportedSong(url: url)
             } catch {
                 statusMessage = "Could not export the songs."
+            }
+        }
+    }
+
+    /// Trashes the ticked songs. The selection is dropped either way: on
+    /// success those rows are gone, and on failure the list has been reloaded
+    /// from the server, so keeping ids that may no longer be on screen would
+    /// leave the bottom bar counting phantoms.
+    private func bulkDelete() {
+        let ids = selectedDocuments.map(\.id)
+        let count = ids.count
+        selection.removeAll()
+        Task {
+            if await model.bulkDeleteDocuments(ids) {
+                statusMessage = "Moved \(count) \(count == 1 ? "song" : "songs") to the trash."
+            } else {
+                statusMessage = model.errorMessage ?? "Could not delete those songs."
             }
         }
     }
