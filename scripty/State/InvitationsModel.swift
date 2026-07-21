@@ -2,12 +2,18 @@
 //  InvitationsModel.swift
 //  scripty
 //
-//  Who has been invited to a screenplay, and inviting more.
+//  Who can see a screenplay: the people who already can, and the people who
+//  have been invited to.
 //
-//  The whole surface is gated on a link the project advertises, which the
+//  The invitation surface is gated on a link the project advertises, which the
 //  server only offers when its `api-invitations` flag is on. So a deployment
-//  that has not enabled invitations over the API shows nothing at all here,
+//  that has not enabled invitations over the API shows nothing of it at all,
 //  rather than a button that fails.
+//
+//  The access list is not behind that flag, and is deliberately loaded even
+//  when invitations are off — a role or a team grants access with no invitation
+//  involved, so "nobody has been invited" was never the same answer as "nobody
+//  else can see this".
 //
 
 import Foundation
@@ -17,12 +23,17 @@ import Observation
 @MainActor
 final class InvitationsModel {
     private let app: AppModel
-    private let source: HALLink
+    /// The project's `invitations` link. Nil where the deployment has not
+    /// turned the API's invitation surface on — the access list still loads.
+    private let source: HALLink?
     /// The project's `contact-suggestions` link, when it advertised one. Nil
     /// simply means no autofill — the invite field still works by hand.
     private let contactsSource: HALLink?
+    /// The project's `access` link.
+    private let accessSource: HALLink?
 
     private(set) var invitations: [Invitation] = []
+    private(set) var people: [ProjectAccessUser] = []
     private(set) var links = HALLinks()
     private(set) var isLoading = false
     private(set) var isWorking = false
@@ -33,25 +44,43 @@ final class InvitationsModel {
 
     var canInvite: Bool { links.contains(.sendInvitation) }
     var canSuggest: Bool { contactsSource != nil }
+    var knowsWhoHasAccess: Bool { accessSource != nil }
 
     var collaborators: [Invitation] { invitations.filter { !$0.isViewOnly } }
     var readers: [Invitation] { invitations.filter(\.isViewOnly) }
 
-    init(app: AppModel, source: HALLink, contactsSource: HALLink? = nil) {
+    init(app: AppModel,
+         source: HALLink?,
+         contactsSource: HALLink? = nil,
+         accessSource: HALLink? = nil) {
         self.app = app
         self.source = source
         self.contactsSource = contactsSource
+        self.accessSource = accessSource
     }
 
     func load() async {
         isLoading = true
         defer { isLoading = false }
-        do {
-            let collection: HALCollection<Invitation> = try await app.client.fetch(from: source)
-            adopt(collection)
-            errorMessage = nil
-        } catch {
-            report(error)
+        if let source {
+            do {
+                let collection: HALCollection<Invitation> = try await app.client.fetch(from: source)
+                adopt(collection)
+                errorMessage = nil
+            } catch {
+                report(error)
+            }
+        }
+        await loadAccess()
+    }
+
+    /// Quiet on failure. This list is context beside the invitations, and an
+    /// alert about it would sit on top of the thing the writer came here to do.
+    private func loadAccess() async {
+        guard let accessSource else { return }
+        if let collection: HALCollection<ProjectAccessUser> =
+            try? await app.client.fetch(from: accessSource) {
+            people = collection.items
         }
     }
 

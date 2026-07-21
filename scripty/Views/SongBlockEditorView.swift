@@ -20,6 +20,7 @@ struct SongBlockEditorView: View {
     @FocusState private var focusedLine: Int?
     @State private var showingEditions = false
     @State private var showingVersions = false
+    @State private var showingTrash = false
 
     init(app: AppModel, document: TextDocument) {
         _model = State(initialValue: SongBlockModel(app: app, document: document))
@@ -65,6 +66,21 @@ struct SongBlockEditorView: View {
                         // A restore rewrites the lyric, so reload rather than
                         // trusting the lines on screen.
                         await model.load()
+                    }
+                }
+            }
+            .sheet(isPresented: $showingTrash) {
+                if let trash = model.trashLink {
+                    TrashView(app: model.app,
+                              source: trash,
+                              title: "Deleted Lines",
+                              emptyMessage: "Lines you delete from this song can be restored here.",
+                              onChanged: {
+                                  // A restored line goes back into the lyric,
+                                  // so the list on screen is out of date.
+                                  await model.load()
+                              }) { (line: DeletedSongBlock) in
+                        DeletedSongBlockRow(line: line)
                     }
                 }
             }
@@ -226,7 +242,33 @@ struct SongBlockEditorView: View {
                 }
             }
         }
+        // Undo sits on the leading edge, where the screenplay editor puts it,
+        // and only appears where the server keeps a stack for this song.
+        if model.hasUndoStack {
+            ToolbarItemGroup(placement: .navigation) {
+                Button {
+                    Task { await model.undo() }
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!model.canUndo)
+
+                Button {
+                    Task { await model.redo() }
+                } label: {
+                    Label("Redo", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!model.canRedo)
+            }
+        }
         ToolbarItemGroup(placement: .primaryAction) {
+            if model.trashLink != nil {
+                Button {
+                    showingTrash = true
+                } label: {
+                    Label("Deleted Lines", systemImage: "trash")
+                }
+            }
             if editions.hasChoice || editions.canCreate {
                 Button {
                     showingEditions = true

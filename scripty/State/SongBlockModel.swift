@@ -51,6 +51,20 @@ final class SongBlockModel {
     /// once the lyric has loaded.
     var versionsLink: HALLink? { links[.versions] }
 
+    /// The lines deleted from this song, still restorable. Advertised to
+    /// readers too — seeing what was cut is reading — so this is not gated on
+    /// being able to type.
+    var trashLink: HALLink? { links[.trash] }
+
+    /// Whether stepping back and forward is available, and where. Only an
+    /// editor is offered the status link, since the checkpoints are made by
+    /// their own edits.
+    private(set) var undoRedo: UndoRedoStatus?
+
+    var canUndo: Bool { undoRedo?.canUndo ?? false }
+    var canRedo: Bool { undoRedo?.canRedo ?? false }
+    var hasUndoStack: Bool { links.contains(.undoRedoStatus) }
+
     init(app: AppModel, document: TextDocument) {
         self.app = app
         self.document = document
@@ -69,6 +83,8 @@ final class SongBlockModel {
         } catch {
             report(error)
         }
+        // After adopt, so the status link this round advertised is the one used.
+        await refreshUndoRedo()
     }
 
     private func adopt(_ collection: HALCollection<SongBlock>) {
@@ -111,6 +127,9 @@ final class SongBlockModel {
             liveText[block.id] = nil
             replace(updated)
             errorMessage = nil
+            // The edit left a checkpoint behind it, so there is now somewhere
+            // to step back to even though the list did not reload.
+            await refreshUndoRedo()
         } catch {
             report(error)
         }
@@ -204,6 +223,35 @@ final class SongBlockModel {
                 from: link, method: "POST",
                 body: SetSongBlockHighlightCommand(highlight: highlight?.rawValue))
             replace(updated)
+            errorMessage = nil
+            await refreshUndoRedo()
+        } catch {
+            report(error)
+        }
+    }
+
+    // MARK: - Undo / redo
+
+    /// Re-reads whether there is anywhere to step. Quiet on failure: a stale
+    /// pair of buttons is a smaller intrusion than an alert about a status.
+    func refreshUndoRedo() async {
+        guard let link = links[.undoRedoStatus] else { return }
+        undoRedo = try? await app.client.fetch(UndoRedoStatus.self, from: link)
+    }
+
+    func undo() async { await step(.undo) }
+    func redo() async { await step(.redo) }
+
+    private func step(_ rel: Rel) async {
+        guard let link = undoRedo?.link(rel) else { return }
+        // A half-typed line would be undone out from under itself otherwise —
+        // the checkpoint it belongs to has not been recorded yet.
+        await commitAll()
+        do {
+            let collection: HALCollection<SongBlock> = try await app.client.fetch(
+                from: link, method: "POST")
+            adopt(collection)
+            await refreshUndoRedo()
             errorMessage = nil
         } catch {
             report(error)

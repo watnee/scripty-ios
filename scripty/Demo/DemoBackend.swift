@@ -87,6 +87,12 @@ actor DemoBackend {
     private var nextSongBlockId = 1
     private var songEditions: [DemoSongEdition] = []
     private var nextSongEditionId = 1
+    // Trash and history are per song version, as on the server: undoing in one
+    // version must not reach into another's lines.
+    private var deletedSongBlocks: [Int: [DeletedDemoSongBlock]] = [:]
+    private var nextDeletedSongBlockId = 1
+    private var songUndoStacks: [Int: [[DemoSongBlock]]] = [:]
+    private var songRedoStacks: [Int: [[DemoSongBlock]]] = [:]
     private var deletedDocuments: [Int: [DeletedDemoDocument]] = [:]
     private var invitations: [DemoInvitation] = []
     private var nextInvitationId = 1
@@ -413,6 +419,8 @@ actor DemoBackend {
             return demoExport(projects[index], format: format)
         case ("GET", "contact-suggestions"):
             return contactSuggestions(matching: query["q"] ?? "")
+        case ("GET", "access"):
+            return projectAccess(id)
         case ("POST", "toggleDefault"):
             defaultProjectId = (defaultProjectId == id) ? nil : id
             return projectCollection()
@@ -1634,6 +1642,29 @@ actor DemoBackend {
     private func routeSongBlock(method: String, path: [String],
                                 query: [String: String],
                                 fields: [String: Any]) -> (Int, Data) {
+        // `trash`, `undo`, `redo` and `undo-redo-status` are siblings of the
+        // line resources rather than line ids, so they are picked off before
+        // the numeric lookup below — the same shape /api/block uses.
+        if path.first == "trash" {
+            return routeSongBlockTrash(method: method,
+                                       path: Array(path.dropFirst()), query: query)
+        }
+        if let step = path.first, ["undo", "redo", "undo-redo-status"].contains(step) {
+            guard let documentId = query["documentId"].flatMap(Int.init),
+                  locateDocument(documentId) != nil,
+                  let editionId = resolveSongEdition(documentId,
+                                                     editionId: query["editionId"].flatMap(Int.init))
+            else { return badRequest("documentId") }
+            ensureSongBlocks(documentId, editionId: editionId)
+            if step == "undo-redo-status" {
+                guard method == "GET" else { return notFound() }
+                return ok(songUndoRedoJSON(documentId: documentId, editionId: editionId))
+            }
+            guard method == "POST" else { return notFound() }
+            return applySongHistory(documentId: documentId,
+                                    editionId: editionId, undoing: step == "undo")
+        }
+
         switch (method, path.count) {
         case ("GET", 0), ("POST", 0):
             guard let documentId = query["documentId"].flatMap(Int.init),
@@ -1646,6 +1677,7 @@ actor DemoBackend {
             if method == "GET" {
                 return songBlockCollection(documentId, editionId: editionId)
             }
+            snapshotSong(editionId)
             let block = DemoSongBlock(
                 id: nextSongBlockId,
                 order: (songBlocks[editionId] ?? []).map(\.order).max().map { $0 + 1 } ?? 1,
@@ -1666,18 +1698,22 @@ actor DemoBackend {
 
         switch (method, path.dropFirst().first) {
         case ("PUT", nil):
+            snapshotSong(editionId)
             songBlocks[editionId]?[index].content = fields["content"] as? String ?? ""
             syncSongText(documentId, editionId: editionId)
             return ok(songBlockJSON(songBlocks[editionId]![index],
                                     documentId: documentId, editionId: editionId))
 
         case ("DELETE", nil):
+            snapshotSong(editionId)
+            trashSongBlock(songBlocks[editionId]![index], editionId: editionId)
             songBlocks[editionId]?.remove(at: index)
             renumberSongBlocks(editionId)
             syncSongText(documentId, editionId: editionId)
             return songBlockCollection(documentId, editionId: editionId)
 
         case ("POST", "below"):
+            snapshotSong(editionId)
             var list = songBlocks[editionId] ?? []
             // Order is assigned by renumbering below, from where it lands in
             // the array; anything set here would only be overwritten.
@@ -1693,6 +1729,7 @@ actor DemoBackend {
 
         case ("POST", "move"):
             guard let position = fields["position"] as? Int else { return badRequest("position") }
+            snapshotSong(editionId)
             var list = (songBlocks[editionId] ?? []).sorted { $0.order < $1.order }
             let target = min(max(position - 1, 0), list.count - 1)
             let moved = list.remove(at: index)
@@ -1703,6 +1740,7 @@ actor DemoBackend {
             return songBlockCollection(documentId, editionId: editionId)
 
         case ("POST", "highlight"):
+            snapshotSong(editionId)
             let known = ["YELLOW", "GREEN", "BLUE", "RED", "GRAY"]
             let raw = (fields["highlight"] as? String)?
                 .trimmingCharacters(in: .whitespaces).uppercased()
@@ -1755,8 +1793,143 @@ actor DemoBackend {
                 "create": link("/api/song/block?documentId=\(documentId)&editionId=\(editionId)"),
                 "song": link("/api/document/\(documentId)"),
                 "versions": link("/api/song/version?documentId=\(documentId)"),
+                "trash": link("/api/song/block/trash?documentId=\(documentId)&editionId=\(editionId)"),
+                "undoRedoStatus": link(
+                    "/api/song/block/undo-redo-status?documentId=\(documentId)&editionId=\(editionId)"),
             ],
         ])
+    }
+
+    // MARK: - Deleted lines, and stepping back
+
+    /// A deleted lyric line. Like a screenplay element it comes back as a new
+    /// line rather than the original id, which is what the server does too.
+    private struct DeletedDemoSongBlock {
+        var id: Int
+        var block: DemoSongBlock
+        var deletedAt: Date
+    }
+
+    private func trashSongBlock(_ block: DemoSongBlock, editionId: Int) {
+        deletedSongBlocks[editionId, default: []].append(
+            DeletedDemoSongBlock(id: nextDeletedSongBlockId, block: block, deletedAt: Date()))
+        nextDeletedSongBlockId += 1
+    }
+
+    private func routeSongBlockTrash(method: String, path: [String],
+                                     query: [String: String]) -> (Int, Data) {
+        guard let documentId = query["documentId"].flatMap(Int.init),
+              locateDocument(documentId) != nil,
+              let editionId = resolveSongEdition(documentId,
+                                                 editionId: query["editionId"].flatMap(Int.init))
+        else { return badRequest("documentId") }
+
+        if method == "GET", path.isEmpty {
+            return songTrashCollection(documentId, editionId: editionId)
+        }
+
+        guard let deletedId = path.first.flatMap(Int.init),
+              let index = deletedSongBlocks[editionId]?.firstIndex(where: { $0.id == deletedId })
+        else { return notFound() }
+
+        switch (method, path.dropFirst().first) {
+        case ("POST", "restore"):
+            let record = deletedSongBlocks[editionId]!.remove(at: index)
+            snapshotSong(editionId)
+            var restored = record.block
+            restored.id = nextSongBlockId
+            nextSongBlockId += 1
+            var list = (songBlocks[editionId] ?? []).sorted { $0.order < $1.order }
+            // Back where it was, clamped in case the lyric has since shrunk.
+            let target = min(max(restored.order - 1, 0), list.count)
+            list.insert(restored, at: target)
+            songBlocks[editionId] = list
+            renumberSongBlocks(editionId)
+            syncSongText(documentId, editionId: editionId)
+            return songTrashCollection(documentId, editionId: editionId)
+
+        case ("DELETE", nil):
+            deletedSongBlocks[editionId]?.remove(at: index)
+            return songTrashCollection(documentId, editionId: editionId)
+
+        default:
+            return notFound()
+        }
+    }
+
+    private func songTrashCollection(_ documentId: Int, editionId: Int) -> (Int, Data) {
+        let base = "/api/song/block/trash?documentId=\(documentId)&editionId=\(editionId)"
+        let items = (deletedSongBlocks[editionId] ?? [])
+            .sorted { $0.deletedAt > $1.deletedAt }
+            .map { record -> [String: Any] in
+                let content = record.block.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                var json: [String: Any] = [
+                    "id": record.id,
+                    "content": record.block.content,
+                    "blank": content.isEmpty,
+                    "deletedAt": iso.string(from: record.deletedAt),
+                    "purgeAt": iso.string(from: record.deletedAt.addingTimeInterval(
+                        Double(Self.trashRetentionDays) * 86_400)),
+                    "_links": [
+                        "restore": link("/api/song/block/trash/\(record.id)/restore"
+                                        + "?documentId=\(documentId)&editionId=\(editionId)"),
+                        "purge": link("/api/song/block/trash/\(record.id)"
+                                      + "?documentId=\(documentId)&editionId=\(editionId)"),
+                        "trash": link(base),
+                    ],
+                ]
+                if let highlight = record.block.highlight { json["highlight"] = highlight }
+                return json
+            }
+        return ok([
+            "_embedded": ["deletedSongBlockResourceList": items],
+            "_links": [
+                "self": link(base),
+                "songBlocks": link("/api/song/block?documentId=\(documentId)&editionId=\(editionId)"),
+                "song": link("/api/document/\(documentId)"),
+            ],
+        ])
+    }
+
+    private func snapshotSong(_ editionId: Int) {
+        songUndoStacks[editionId, default: []].append(songBlocks[editionId] ?? [])
+        if songUndoStacks[editionId]!.count > 50 {
+            songUndoStacks[editionId]!.removeFirst()
+        }
+        songRedoStacks[editionId] = []
+    }
+
+    private func applySongHistory(documentId: Int, editionId: Int, undoing: Bool) -> (Int, Data) {
+        let popped = undoing
+            ? songUndoStacks[editionId]?.popLast()
+            : songRedoStacks[editionId]?.popLast()
+        // An empty stack is not an error on the server either: the lyric comes
+        // back unchanged and the status link is where a client learns why.
+        if let state = popped {
+            let current = songBlocks[editionId] ?? []
+            if undoing {
+                songRedoStacks[editionId, default: []].append(current)
+            } else {
+                songUndoStacks[editionId, default: []].append(current)
+            }
+            songBlocks[editionId] = state
+            syncSongText(documentId, editionId: editionId)
+        }
+        return songBlockCollection(documentId, editionId: editionId)
+    }
+
+    private func songUndoRedoJSON(documentId: Int, editionId: Int) -> [String: Any] {
+        let canUndo = !(songUndoStacks[editionId] ?? []).isEmpty
+        let canRedo = !(songRedoStacks[editionId] ?? []).isEmpty
+        let suffix = "documentId=\(documentId)&editionId=\(editionId)"
+        var links: [String: Any] = [
+            "self": link("/api/song/block/undo-redo-status?" + suffix),
+            "songBlocks": link("/api/song/block?" + suffix),
+            "song": link("/api/document/\(documentId)"),
+        ]
+        if canUndo { links["undo"] = link("/api/song/block/undo?" + suffix) }
+        if canRedo { links["redo"] = link("/api/song/block/redo?" + suffix) }
+        return ["canUndo": canUndo, "canRedo": canRedo, "_links": links]
     }
 
     private func songBlockJSON(_ block: DemoSongBlock,
@@ -2679,6 +2852,48 @@ actor DemoBackend {
                     "users": link("/api/user")]]
     }
 
+    /// Who can already see a project. Built from the same accounts the Users
+    /// view lists, so the two agree — and, like the server, it is the roles and
+    /// the team that put someone here, not an invitation. A disabled account is
+    /// left out: it cannot sign in, so it cannot be reading anything.
+    private func projectAccess(_ projectId: Int) -> (Int, Data) {
+        let people = usersStore
+            .filter(\.enabled)
+            .map { user -> (name: String, why: String, canEdit: Bool) in
+                let name = "\(user.firstName) \(user.lastName)"
+                let canEdit = user.admin || user.writer
+                let why: String
+                if user.admin {
+                    why = "Admin"
+                } else if user.writer {
+                    why = "Writer"
+                } else if user.director {
+                    why = "Director"
+                } else if let team = user.team {
+                    why = "On the \(team) team"
+                } else {
+                    why = "Has access"
+                }
+                return (name, why, canEdit)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { person -> [String: Any] in
+                [
+                    "displayName": person.name,
+                    "accessLabel": person.why,
+                    "canEdit": person.canEdit,
+                    "permissionLabel": person.canEdit ? "Can edit" : "View only",
+                ]
+            }
+        return ok([
+            "_embedded": ["projectAccessUserResourceList": people],
+            "_links": [
+                "self": link("/api/project/\(projectId)/access"),
+                "project": link("/api/project/\(projectId)"),
+            ],
+        ])
+    }
+
     private func projectJSON(_ project: DemoProject) -> [String: Any] {
         var json: [String: Any] = [
             "id": project.id,
@@ -2708,6 +2923,7 @@ actor DemoBackend {
                 "editions": link("/api/project/edition?projectId=\(project.id)"),
                 "activity": link("/api/project/\(project.id)/activity"),
                 "invitations": link("/api/project/\(project.id)/invitations"),
+                "access": link("/api/project/\(project.id)/access"),
                 "contactSuggestions": link("/api/project/\(project.id)/contact-suggestions"),
             ],
         ]
