@@ -205,6 +205,41 @@ struct DeletedBlockRow: View {
     }
 }
 
+/// One deleted lyric line.
+///
+/// The line itself is the whole row: it is short, and it is what the writer is
+/// deciding about. Its tint comes along, because a line that was marked is
+/// usually the one being looked for.
+struct DeletedSongBlockRow: View {
+    let line: DeletedSongBlock
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(line.displayContent)
+                .font(.callout)
+                .foregroundStyle(line.isBlankLine ? .secondary : .primary)
+                .lineLimit(3)
+
+            HStack(spacing: 6) {
+                if let deleted = line.deletedAt {
+                    Text("Deleted \(deleted, format: .relative(presentation: .named))")
+                }
+                // Absent where the deployment keeps trashed lines until someone
+                // says otherwise, so nothing here implies a deadline.
+                if let purge = line.purgeAt {
+                    Text("· Removed \(purge, format: .relative(presentation: .named))")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(line.tint.map { $0.color(for: colorScheme) })
+    }
+}
+
 /// One deleted song or note.
 struct DeletedDocumentRow: View {
     let document: DeletedDocument

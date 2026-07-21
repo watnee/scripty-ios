@@ -138,6 +138,12 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let sendInvitation = Rel("sendInvitation")
     static let revoke = Rel("revoke")
 
+    /// Who can already see a project, which is a different question from who
+    /// has been invited to it: a role or a team grants access with no
+    /// invitation involved, so the invitation list alone never answers it.
+    /// Advertised on every project the caller can open, invitations or not.
+    static let access = Rel("access")
+
     /// Names known to this project, offered while typing an invite address so
     /// the sender need not remember the email. Scoped to the project, so it is
     /// not a directory of everyone.

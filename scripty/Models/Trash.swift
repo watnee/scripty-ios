@@ -43,6 +43,39 @@ struct DeletedBlock: Decodable, Identifiable, Hashable, HALResource {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+/// A lyric line in the trash.
+///
+/// Carries the whole line rather than a preview, unlike a screenplay element:
+/// a line is short, and the writer deciding whether to bring it back is reading
+/// the words themselves.
+struct DeletedSongBlock: Decodable, Identifiable, Hashable, HALResource {
+    let id: Int
+    var content: String?
+    var blank: Bool?
+    var highlight: String?
+    var deletedAt: Date?
+    var purgeAt: Date?
+    let links: HALLinks?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, content, blank, highlight, deletedAt, purgeAt
+        case links = "_links"
+    }
+
+    /// A line deleted while still empty has no words to show.
+    var isBlankLine: Bool { blank ?? false }
+
+    var displayContent: String {
+        let trimmed = (content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Empty line" : trimmed
+    }
+
+    var tint: BlockHighlight? { BlockHighlight(serverValue: highlight) }
+
+    static func == (lhs: DeletedSongBlock, rhs: DeletedSongBlock) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 /// A song or note in the trash.
 struct DeletedDocument: Decodable, Identifiable, Hashable, HALResource {
     let id: Int

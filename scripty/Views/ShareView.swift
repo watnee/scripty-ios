@@ -4,6 +4,12 @@
 //
 //  Who has access to a screenplay, and inviting more.
 //
+//  "People with access" comes first because it is the honest answer to the
+//  question the sheet is opened with. Access follows from a role or a team as
+//  much as from an invitation, so this list can hold people no invitation ever
+//  named — and until it was here, an empty invitation list read as "nobody else
+//  can see this", which was often untrue.
+//
 //  Collaborators and readers are listed apart because they are different
 //  grants: a collaborator gets an account and can write, a reader gets a link
 //  and can only read. Conflating them would make it easy to hand out the wrong
@@ -28,9 +34,14 @@ struct ShareView: View {
     @State private var sentNotice: String?
     @FocusState private var emailFocused: Bool
 
-    init(app: AppModel, source: HALLink, contactsSource: HALLink? = nil, projectTitle: String) {
+    init(app: AppModel,
+         source: HALLink?,
+         contactsSource: HALLink? = nil,
+         accessSource: HALLink? = nil,
+         projectTitle: String) {
         _model = State(initialValue: InvitationsModel(
-            app: app, source: source, contactsSource: contactsSource))
+            app: app, source: source,
+            contactsSource: contactsSource, accessSource: accessSource))
         self.projectTitle = projectTitle
     }
 
@@ -39,6 +50,21 @@ struct ShareView: View {
             Form {
                 if model.canInvite {
                     inviteSection
+                }
+
+                if !model.people.isEmpty {
+                    Section {
+                        ForEach(model.people) { person in
+                            accessRow(person)
+                        }
+                    } header: {
+                        Text("People with Access")
+                    } footer: {
+                        // The reasons are the server's, rendered per person, so
+                        // nothing here restates the access rules in Swift.
+                        Text("Includes anyone whose role or team lets them open "
+                             + "“\(projectTitle)”, invited or not.")
+                    }
                 }
 
                 if !model.collaborators.isEmpty {
@@ -58,9 +84,13 @@ struct ShareView: View {
                     }
                 }
 
-                if model.collaborators.isEmpty && model.readers.isEmpty && !model.isLoading {
+                // Only when there is genuinely nothing to report. Saying nobody
+                // has been invited while the access list is showing five people
+                // would be answering a question nobody asked.
+                if model.collaborators.isEmpty && model.readers.isEmpty
+                    && model.people.isEmpty && !model.isLoading {
                     Section {
-                        Text("Nobody else has been invited to “\(projectTitle)”.")
+                        Text("Nobody else can see “\(projectTitle)”.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -161,6 +191,29 @@ struct ShareView: View {
             Text(sentNotice
                  ?? "They will get an email. Scripty does not say whether an address "
                  + "already has an account.")
+        }
+    }
+
+    /// One person who can already see the screenplay. Nothing to swipe: access
+    /// that comes from a role or a team is not revoked from here, and offering
+    /// a Remove that quietly did nothing would be worse than offering none.
+    private func accessRow(_ person: ProjectAccessUser) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(person.name)
+                if let why = person.accessLabel, !why.isEmpty {
+                    Text(why)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(person.permission)
+                .font(.caption2.weight(.medium))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(.quaternary.opacity(0.5), in: Capsule())
+                .foregroundStyle(person.writes ? .primary : .secondary)
         }
     }
 

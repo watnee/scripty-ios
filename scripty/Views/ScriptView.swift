@@ -27,8 +27,10 @@ struct ScriptView: View {
     /// The element whose comment thread is open, if any.
     @State private var commentTarget: Block?
     @State private var activityLink: HALLink?
-    /// Only present when the server has invitations over the API turned on.
-    @State private var shareLink: HALLink?
+    /// The sheet holds two things — who can already see the screenplay, and the
+    /// invitations — and either one alone is worth opening it for. Inviting is
+    /// only offered where the server has invitations over the API turned on.
+    @State private var showingShare = false
     @State private var editions: EditionsModel
     @State private var exporter: ScriptExportModel
     @State private var navigator = ScriptNavigator()
@@ -118,9 +120,11 @@ struct ScriptView: View {
         .sheet(item: $activityLink) { link in
             ActivityView(app: model.app, source: link)
         }
-        .sheet(item: $shareLink) { link in
-            ShareView(app: model.app, source: link,
+        .sheet(isPresented: $showingShare) {
+            ShareView(app: model.app,
+                      source: model.project.link(.invitations),
                       contactsSource: model.project.link(.contactSuggestions),
+                      accessSource: model.project.link(.access),
                       projectTitle: model.project.displayTitle)
         }
         .sheet(item: $commentTarget, onDismiss: {
@@ -585,9 +589,9 @@ struct ScriptView: View {
                     }
                 }
 
-                if let share = model.project.link(.invitations) {
+                if model.project.hasLink(.invitations) || model.project.hasLink(.access) {
                     Button {
-                        shareLink = share
+                        showingShare = true
                     } label: {
                         Label("Share", systemImage: "person.badge.plus")
                     }

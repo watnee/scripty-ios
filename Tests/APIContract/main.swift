@@ -1081,6 +1081,8 @@ func run() async {
     await checkUsers(root: root)
     await checkContactSuggestions(pid: pid)
     await checkBundleExports(pid: pid)
+    await checkSongTrashAndHistory(pid: pid)
+    await checkProjectAccess(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
@@ -1525,6 +1527,133 @@ func checkUsers(root: [String: Any]) async {
     check("an admin deleting their own account -> 400",
           await be.respond(method: "DELETE", url: url("/api/user/1"), body: nil).status == 400)
 
+}
+
+/// Getting a deleted lyric line back, and stepping an edit backwards.
+///
+/// Deleting a line has always been a soft delete, and the song editor has
+/// always kept an undo stack — the API just never advertised either, so a line
+/// deleted from the iPad was gone for good and one deleted from the browser was
+/// not. Both hang off the line collection, which is where the client looks.
+func checkSongTrashAndHistory(pid: Int) async {
+    let song = json(await be.respond(
+        method: "POST", url: url("/api/document"),
+        body: body(["projectId": pid, "title": "Second Reprise", "documentType": "SONG",
+                    "content": "First line.\nSecond line.\nThird line."])).data)
+    guard let docId = song["id"] as? Int else {
+        check("a song to work with", false)
+        return
+    }
+
+    func lyric() async -> [String: Any] {
+        json(await be.respond(method: "GET",
+                              url: url("/api/song/block?documentId=\(docId)"), body: nil).data)
+    }
+    func follow(_ rel: String, in resource: [String: Any], method: String = "GET") async -> [String: Any] {
+        guard let href = (links(resource)[rel] as? [String: Any])?["href"] as? String,
+              let target = URL(string: href) else { return [:] }
+        return json(await be.respond(method: method, url: target, body: nil).data)
+    }
+
+    var collection = await lyric()
+    check("the lyric advertises its `trash`", links(collection)["trash"] != nil)
+    check("the lyric advertises `undoRedoStatus`", links(collection)["undoRedoStatus"] != nil)
+
+    // --- TRASH ---
+    let doomed = embedded(collection).first { $0["content"] as? String == "Second line." }
+    guard let doomedId = doomed?["id"] as? Int else {
+        check("a line to delete", false)
+        return
+    }
+    _ = await be.respond(method: "DELETE", url: url("/api/song/block/\(doomedId)"), body: nil)
+
+    var trash = await follow("trash", in: collection)
+    let trashed = embedded(trash).first
+    check("a deleted line lands in the song's trash",
+          trashed?["content"] as? String == "Second line.")
+    // The whole line, not a preview: it is short, and it is what the writer is
+    // deciding about.
+    check("the trashed line carries its words rather than a preview",
+          trashed?["preview"] == nil && trashed?["content"] != nil)
+    check("a trashed line advertises `restore` and `purge`",
+          (trashed?["_links"] as? [String: Any])?["restore"] != nil
+          && (trashed?["_links"] as? [String: Any])?["purge"] != nil)
+
+    trash = await follow("restore", in: trashed ?? [:], method: "POST")
+    check("restoring answers with the refreshed trash", embedded(trash).isEmpty)
+    collection = await lyric()
+    check("the restored line is back in the lyric",
+          embedded(collection).contains { $0["content"] as? String == "Second line." })
+    check("and the lyric renumbers around it",
+          embedded(collection).enumerated().allSatisfy { $1["order"] as? Int == $0 + 1 })
+
+    // Purging leaves nothing to restore.
+    let second = embedded(collection).first { $0["content"] as? String == "Second line." }
+    _ = await be.respond(method: "DELETE",
+                         url: url("/api/song/block/\(second?["id"] as? Int ?? 0)"), body: nil)
+    trash = await follow("trash", in: collection)
+    let toPurge = embedded(trash).first ?? [:]
+    trash = await follow("purge", in: toPurge, method: "DELETE")
+    check("purging empties the trash", embedded(trash).isEmpty)
+    check("and the line does not come back",
+          !(embedded(await lyric()).contains { $0["content"] as? String == "Second line." }))
+
+    // --- UNDO / REDO ---
+    collection = await lyric()
+    var status = await follow("undoRedoStatus", in: collection)
+    check("there is something to undo after those edits", status["canUndo"] as? Bool == true)
+    check("and nothing to redo yet", status["canRedo"] as? Bool == false)
+    check("the status carries the `undo` link", links(status)["undo"] != nil)
+    check("and offers no `redo` link while the stack is empty", links(status)["redo"] == nil)
+
+    let beforeUndo = embedded(collection).count
+    let undone = await follow("undo", in: status, method: "POST")
+    check("undo answers with the rewound lyric rather than a status",
+          embedded(undone).count != beforeUndo || links(undone)["songBlocks"] == nil,
+          "got \(embedded(undone).count) lines, was \(beforeUndo)")
+    status = await follow("undoRedoStatus", in: await lyric())
+    check("after an undo there is something to redo", status["canRedo"] as? Bool == true)
+
+    let redone = await follow("redo", in: status, method: "POST")
+    check("redo puts it back", embedded(redone).count == beforeUndo,
+          "got \(embedded(redone).count), was \(beforeUndo)")
+}
+
+/// Who can already see a project, which is not who has been invited to it.
+///
+/// The client used to answer "nobody else has been invited" and let that stand
+/// as the answer to "who can see this", which a role or a team quietly made
+/// untrue. The rel sits outside the invitation feature flag for that reason.
+func checkProjectAccess(pid: Int) async {
+    let project = json(await be.respond(
+        method: "GET", url: url("/api/project/\(pid)"), body: nil).data)
+    check("a project advertises `access`", links(project)["access"] != nil)
+
+    guard let href = (links(project)["access"] as? [String: Any])?["href"] as? String,
+          let target = URL(string: href) else {
+        check("the access link is followable", false)
+        return
+    }
+    let list = json(await be.respond(method: "GET", url: target, body: nil).data)
+    let people = embedded(list)
+    check("it lists the people who can see it", !people.isEmpty)
+    check("each carries a name", people.allSatisfy { ($0["displayName"] as? String)?.isEmpty == false })
+    // The reason and the permission arrive rendered, so the client never
+    // restates the server's access rules in Swift.
+    check("each says why they are here",
+          people.allSatisfy { ($0["accessLabel"] as? String)?.isEmpty == false })
+    check("each says whether they can write",
+          people.allSatisfy { $0["canEdit"] is Bool && $0["permissionLabel"] is String })
+    check("the labels agree with the flag",
+          people.allSatisfy {
+              ($0["canEdit"] as? Bool == true) == ($0["permissionLabel"] as? String == "Can edit")
+          })
+    check("it links back to the project", links(list)["project"] != nil)
+
+    // Names are how the client identifies a row, so a duplicate would collapse
+    // two people into one in the list.
+    let names = people.compactMap { $0["displayName"] as? String }
+    check("names are unique enough to identify a row", Set(names).count == names.count)
 }
 
 await run()
