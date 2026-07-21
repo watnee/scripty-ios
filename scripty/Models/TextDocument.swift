@@ -85,6 +85,12 @@ struct ReorderDocumentsCommand: Encodable {
     var orderedIds: [Int]
 }
 
+/// The songs to move to the trash in one call. Songs only, as on the web: the
+/// server skips any id that is not a song of this project.
+struct BulkDeleteDocumentsCommand: Encodable {
+    var ids: [Int]
+}
+
 /// Switch a document between song and note. The server takes the raw type
 /// ("SONG" / "NOTES") and normalizes anything else to NOTES.
 struct ChangeDocumentTypeCommand: Encodable {
