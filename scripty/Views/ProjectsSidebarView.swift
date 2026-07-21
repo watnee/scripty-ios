@@ -44,6 +44,8 @@ struct ProjectsSidebarView: View {
     /// The API root's `teams` link, present only for a user who may manage
     /// them. Held so the sheet opens from the link, not a bare flag.
     @State private var teamsLink: HALLink?
+    /// The API root's `users` link — advertised only to an admin, same as teams.
+    @State private var usersLink: HALLink?
     @State private var showingPreferences = false
     @State private var searchText = ""
     @AppStorage("projectListSort") private var sortMode = ProjectSort.lastEdited
@@ -173,6 +175,17 @@ struct ProjectsSidebarView: View {
                     }
                 }
             }
+            // Admin-only, same gate as teams: the root advertises `users` to no
+            // one else.
+            if let users = app.apiRoot?.link(.users) {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        usersLink = users
+                    } label: {
+                        Label("Users", systemImage: "person.crop.circle")
+                    }
+                }
+            }
             // Editor preferences (auto-capitalization) — advertised on the root
             // only for a signed-in account, since they are stored per user.
             if app.apiRoot?.hasLink(.capitalizationPreferences) == true {
@@ -209,6 +222,9 @@ struct ProjectsSidebarView: View {
         }
         .sheet(item: $teamsLink) { link in
             TeamsView(app: app, source: link, projects: model.projects)
+        }
+        .sheet(item: $usersLink) { link in
+            UsersView(app: app, source: link)
         }
         .sheet(isPresented: $showingCreate) {
             ProjectTitleSheet(title: "", heading: "New Project") { title in
