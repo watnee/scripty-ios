@@ -73,6 +73,7 @@ echo
 echo "== Script view options =="
 swiftc -o "$BUILD/viewoptions" \
     "$SRC/State/ScriptViewOptions.swift" \
+    "$SRC/State/SongWorkspaceOpenState.swift" \
     "$ROOT/Tests/ViewOptions/main.swift"
 "$BUILD/viewoptions" || status=1
 

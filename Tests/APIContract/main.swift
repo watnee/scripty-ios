@@ -729,6 +729,22 @@ func run() async {
     check("the collection offers `sendInvitation`",
           (inviteRoot["_links"] as? [String: Any])?["sendInvitation"] != nil)
 
+    // Inviting an editor needs a team, and only the project's own are valid.
+    // Without this list the "Can edit" path cannot be sent at all, so the
+    // collection has to advertise it — even for a project with no teams, where
+    // the empty list is what tells the sender to assign one first.
+    check("the collection offers `inviteTeams`",
+          (inviteRoot["_links"] as? [String: Any])?["inviteTeams"] != nil)
+    let teamsResponse = await be.respond(method: "GET",
+                                         url: url("/api/project/\(pid)/invitations/teams"), body: nil)
+    check("invite teams -> 200", teamsResponse.status == 200, "got \(teamsResponse.status)")
+    let inviteTeams = embedded(json(teamsResponse.data))
+    check("the project's team is offered to invite into", !inviteTeams.isEmpty,
+          "got \(inviteTeams.count)")
+    check("each team carries the id `sendInvitation` needs",
+          inviteTeams.allSatisfy { $0["id"] as? Int != nil })
+    let inviteTeamId = inviteTeams.first?["id"] as? Int ?? 0
+
     var invites = embedded(inviteRoot)
     check("seeded invitations are present", invites.count >= 2, "got \(invites.count)")
     check("collaborators and readers are distinguishable",
@@ -737,18 +753,28 @@ func run() async {
     check("no invitation carries a token or a link to share",
           invites.allSatisfy { $0["token"] == nil && $0["inviteUrl"] == nil && $0["url"] == nil })
 
+    // A collaborator invitation without a team is refused, the same wall the
+    // real service puts up — this is the bug the endpoint above exists to fix.
+    check("inviting an editor with no team -> 400",
+          await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
+                           body: body(["email": "teamless@example.com", "viewOnly": false])).status == 400)
+
     let inviteCountBefore = invites.count
     let invited = await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
-                                   body: body(["email": "newcomer@example.com", "viewOnly": false]))
+                                   body: body(["email": "newcomer@example.com", "viewOnly": false,
+                                               "teamId": inviteTeamId]))
     check("send invitation -> 200", invited.status == 200, "got \(invited.status)")
     invites = embedded(json(invited.data))
     check("the invitation was recorded", invites.count == inviteCountBefore + 1,
           "\(inviteCountBefore) -> \(invites.count)")
+    check("the collaborator's row names its team",
+          invites.first { ($0["email"] as? String) == "newcomer@example.com" }?["teamName"] as? String != nil)
 
     // Inviting a known address answers identically — same status, same shape —
     // so nothing reveals whether that address was already there.
     let repeatInvite = await be.respond(method: "POST", url: url("/api/project/\(pid)/invitations"),
-                                        body: body(["email": "newcomer@example.com", "viewOnly": false]))
+                                        body: body(["email": "newcomer@example.com", "viewOnly": false,
+                                                    "teamId": inviteTeamId]))
     check("re-inviting a known address -> 200, not a conflict",
           repeatInvite.status == 200, "got \(repeatInvite.status)")
     check("re-inviting does not duplicate the invitation",

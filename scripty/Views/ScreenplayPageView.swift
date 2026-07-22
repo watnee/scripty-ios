@@ -19,8 +19,13 @@ struct ScreenplayPageView: View {
     let pages: [ScriptPage]
     let setup: PageSetup
     let zoomScale: Double
+    /// Fit-to-width sizes the sheet to the space it has, so the scale comes
+    /// from measuring this view rather than from the stored percentage.
+    var isFitToWidth: Bool = false
     /// Reported back so the navigator can show "Page 3 of 12" while scrolling.
     var onVisiblePageChanged: (Int) -> Void = { _ in }
+    /// Reported back so the navigator can show what fit worked out to.
+    var onFitZoomChanged: (Int) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { outer in
@@ -49,14 +54,37 @@ struct ScreenplayPageView: View {
                 if let current { onVisiblePageChanged(current) }
             }
             .background(deskColor)
+            // Fit is re-resolved whenever the space changes — a rotation, a
+            // sidebar, or full-width mode all move the sheet's own width.
+            .onChange(of: outer.size.width, initial: true) { _, width in
+                guard isFitToWidth else { return }
+                onFitZoomChanged(fitZoom(containerWidth: width))
+            }
         }
     }
 
     /// Sheets cap out at a comfortable reading width and then zoom from there,
     /// mirroring the web app's `min(10.5in, 100%) * zoom`.
     private func sheetWidth(containerWidth: CGFloat) -> CGFloat {
+        let scale = isFitToWidth
+            ? Double(fitZoom(containerWidth: containerWidth)) / 100.0
+            : zoomScale
+        return baseSheetWidth(containerWidth: containerWidth) * scale
+    }
+
+    private func baseSheetWidth(containerWidth: CGFloat) -> CGFloat {
+        min(max(240, containerWidth - 48), 760)
+    }
+
+    /// What fit works out to here: the unzoomed sheet against the room it has.
+    /// Floored, so a rounded-up fit never spills the sheet past the desk edge.
+    private func fitZoom(containerWidth: CGFloat) -> Int {
         let available = max(240, containerWidth - 48)
-        return min(available, 760) * zoomScale
+        let base = baseSheetWidth(containerWidth: containerWidth)
+        guard base > 0 else { return PresentationSettings.defaultZoom }
+        let percent = Int((available / base * 100).rounded(.down))
+        return min(PresentationSettings.maxZoom,
+                   max(PresentationSettings.minZoom, percent))
     }
 
     @ViewBuilder

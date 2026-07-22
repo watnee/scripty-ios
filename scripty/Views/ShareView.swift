@@ -30,6 +30,10 @@ struct ShareView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draftEmail = ""
     @State private var inviteAsReader = false
+    /// The team a collaborator will join. A collaborator invitation must name
+    /// one of the project's teams, so this is chosen before "Can edit" can be
+    /// sent; a reader invitation ignores it.
+    @State private var selectedTeamId: Int?
     @State private var pendingRevoke: Invitation?
     @State private var sentNotice: String?
     @FocusState private var emailFocused: Bool
@@ -104,8 +108,15 @@ struct ShareView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .task { await model.load() }
-            .refreshable { await model.load() }
+            .task {
+                await model.load()
+                syncSelectedTeam()
+            }
+            .refreshable {
+                await model.load()
+                syncSelectedTeam()
+            }
+            .onChange(of: model.inviteTeams) { _, _ in syncSelectedTeam() }
             .alert("Remove Access", isPresented: revokeBinding) {
                 Button("Cancel", role: .cancel) { pendingRevoke = nil }
                 Button("Remove", role: .destructive) {
@@ -171,6 +182,26 @@ struct ShareView: View {
             }
             .pickerStyle(.segmented)
 
+            // A collaborator joins a team, and only the project's own teams are
+            // valid. Shown only for "Can edit"; a reader has no team.
+            if !inviteAsReader {
+                if model.canInviteCollaborator {
+                    Picker("Team", selection: $selectedTeamId) {
+                        ForEach(model.inviteTeams) { team in
+                            Text(team.displayName).tag(Optional(team.id))
+                        }
+                    }
+                } else {
+                    // Nothing to join. The web offers no editor invite here
+                    // either — the same wall, said plainly rather than as a
+                    // rejected send.
+                    Text("Assign this project to a team before inviting an editor. "
+                         + "You can still invite someone to read.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Button {
                 send()
             } label: {
@@ -180,8 +211,7 @@ struct ShareView: View {
                     Text("Send Invitation")
                 }
             }
-            .disabled(draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                      || model.isWorking)
+            .disabled(!canSend)
         } header: {
             Text("Invite")
         } footer: {
@@ -250,17 +280,38 @@ struct ShareView: View {
         emailFocused = false
     }
 
+    /// A reader needs only an address; a collaborator also needs a team, and
+    /// there is no team to pick until the project has one.
+    private var canSend: Bool {
+        guard !model.isWorking else { return false }
+        guard !draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if inviteAsReader { return true }
+        return model.canInviteCollaborator && selectedTeamId != nil
+    }
+
     private func send() {
         let email = draftEmail
         let asReader = inviteAsReader
+        let teamId = selectedTeamId
         draftEmail = ""
         emailFocused = false
         model.clearSuggestions()
         Task {
-            if await model.invite(email, viewOnly: asReader) {
+            if await model.invite(email, viewOnly: asReader, teamId: teamId) {
                 sentNotice = "Invitation sent to \(email)."
             }
         }
+    }
+
+    /// Keep a team chosen whenever there is one to choose: default to the first
+    /// as soon as the list arrives, and never leave a stale id once the list
+    /// changes underneath it.
+    private func syncSelectedTeam() {
+        if let current = selectedTeamId,
+           model.inviteTeams.contains(where: { $0.id == current }) {
+            return
+        }
+        selectedTeamId = model.inviteTeams.first?.id
     }
 
     private var revokeBinding: Binding<Bool> {

@@ -163,6 +163,33 @@ func run() {
         options.rememberBlock(43)
         check("moving on overwrites", options.rememberedBlockId ?? -1, 43)
     }
+
+    print("")
+    print("Songs workspace open set")
+    do {
+        let store = scratch("workspace")
+        let state = SongWorkspaceOpenState(projectId: 7, defaults: store)
+        check("a fresh workspace opens collapsed", state.load().isEmpty, true)
+
+        state.save([3, 1, 2])
+        check("the open set survives reopening",
+              SongWorkspaceOpenState(projectId: 7, defaults: store).load(), Set([1, 2, 3]))
+        check("it lands in the web's dot-spelled key",
+              store.string(forKey: "scripty.songWorkspace.open.7") ?? "", "[1,2,3]")
+        check("it is remembered per project",
+              SongWorkspaceOpenState(projectId: 8, defaults: store).load().isEmpty, true)
+
+        // Collapsing everything is a real state, distinct from never having
+        // opened the workspace — both read back as empty, which is what matters.
+        state.save([])
+        check("collapsing all is remembered as empty",
+              SongWorkspaceOpenState(projectId: 7, defaults: store).load().isEmpty, true)
+
+        // A hand-written or corrupt value must not throw; it just opens fresh.
+        store.set("not json", forKey: "scripty.songWorkspace.open.7")
+        check("unreadable storage opens collapsed",
+              SongWorkspaceOpenState(projectId: 7, defaults: store).load().isEmpty, true)
+    }
 }
 
 MainActor.assumeIsolated { run() }

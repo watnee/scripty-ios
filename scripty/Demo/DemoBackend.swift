@@ -1362,6 +1362,9 @@ actor DemoBackend {
         var email: String
         var viewOnly: Bool
         var status: String
+        /// The team a collaborator joined, so the row can name it. Nil for a
+        /// reader, who joins no team.
+        var teamName: String?
     }
 
     private func routeInvitations(method: String, projectId: Int, path: [String],
@@ -1372,10 +1375,25 @@ actor DemoBackend {
         case ("GET", 0):
             return invitationCollection(projectId)
 
+        // The teams a collaborator can be invited into: the project's own.
+        case ("GET", 1) where path.first == "teams":
+            return inviteTeamsCollection(projectId)
+
         case ("POST", 0):
             guard let email = (fields["email"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
                 return badRequest("email")
+            }
+            let viewOnly = fields["viewOnly"] as? Bool ?? false
+            // A collaborator must name one of the project's teams; the real
+            // service rejects a missing or foreign team, so the demo does too.
+            var teamName: String?
+            if !viewOnly {
+                guard let teamId = fields["teamId"] as? Int,
+                      let team = inviteTeams(for: projectId).first(where: { $0.id == teamId }) else {
+                    return badRequest("email")
+                }
+                teamName = team.name
             }
             // Answers the same whether or not the address is already known, so
             // the client cannot learn who has an account. The real service
@@ -1388,8 +1406,9 @@ actor DemoBackend {
                     id: nextInvitationId,
                     projectId: projectId,
                     email: email,
-                    viewOnly: fields["viewOnly"] as? Bool ?? false,
-                    status: "Pending"))
+                    viewOnly: viewOnly,
+                    status: "Pending",
+                    teamName: teamName))
                 nextInvitationId += 1
             }
             recordActivity(projectId, type: "INVITATION_SEND",
@@ -1415,7 +1434,7 @@ actor DemoBackend {
         let items = invitations
             .filter { $0.projectId == projectId }
             .map { invitation -> [String: Any] in
-                [
+                var item: [String: Any] = [
                     "id": invitation.id,
                     "email": invitation.email,
                     "statusLabel": invitation.status,
@@ -1425,15 +1444,45 @@ actor DemoBackend {
                         "invitations": link("/api/project/\(projectId)/invitations"),
                     ],
                 ]
+                if let teamName = invitation.teamName { item["teamName"] = teamName }
+                return item
             }
         return ok([
             "_embedded": ["invitationResourceList": items],
             "_links": [
                 "self": link("/api/project/\(projectId)/invitations"),
                 "sendInvitation": link("/api/project/\(projectId)/invitations"),
+                // Always advertised, even where the project has no teams — the
+                // client reads an empty list as "assign a team first".
+                "inviteTeams": link("/api/project/\(projectId)/invitations/teams"),
                 "project": link("/api/project/\(projectId)"),
             ],
         ])
+    }
+
+    /// The teams a collaborator can be invited into. The demo project carries
+    /// the single "Demo" team, matching the badge it already shows.
+    private func inviteTeams(for projectId: Int) -> [DemoTeam] {
+        guard projects.contains(where: { $0.id == projectId }) else { return [] }
+        return teamsStore.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func inviteTeamsCollection(_ projectId: Int) -> (Int, Data) {
+        let items = inviteTeams(for: projectId).map { team -> [String: Any] in
+            ["id": team.id, "name": team.name]
+        }
+        var payload: [String: Any] = [
+            "_links": [
+                "self": link("/api/project/\(projectId)/invitations/teams"),
+                "invitations": link("/api/project/\(projectId)/invitations"),
+            ],
+        ]
+        // An empty collection is a real answer; omit `_embedded` when there is
+        // nothing, the same shape HAL serializes.
+        if !items.isEmpty {
+            payload["_embedded"] = ["inviteTeamResourceList": items]
+        }
+        return ok(payload)
     }
 
     // MARK: - Activity

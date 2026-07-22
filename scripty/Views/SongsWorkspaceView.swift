@@ -29,6 +29,15 @@ struct SongsWorkspaceView: View {
     @State private var lyrics: [Int: SongBlockModel] = [:]
     @State private var expanded: Set<Int> = []
     @State private var filter = ""
+    /// Set once the saved open set has been restored, so the first restore does
+    /// not immediately save the empty starting state back over it.
+    @State private var didRestore = false
+
+    /// Which songs were left open, remembered per project. Shared with the web,
+    /// which stores the same set under the same key.
+    private var openStore: SongWorkspaceOpenState {
+        SongWorkspaceOpenState(projectId: model.project.id)
+    }
 
     private var songs: [TextDocument] {
         let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +70,16 @@ struct SongsWorkspaceView: View {
             .toolbar { toolbar }
             // Leaving flushes every song that was opened: a line half-typed in
             // the third song down is no less precious than one in the first.
-            .task { await model.loadDocuments() }
+            .task {
+                await model.loadDocuments()
+                restoreOpenSongs()
+            }
+            // Remembered per project. Guarded on the restore having happened, so
+            // the empty starting set never overwrites what was saved.
+            .onChange(of: expanded) { _, ids in
+                guard didRestore else { return }
+                openStore.save(ids)
+            }
         }
     }
 
@@ -178,6 +196,17 @@ struct SongsWorkspaceView: View {
         let lyric = SongBlockModel(app: app, document: song)
         lyrics[song.id] = lyric
         Task { await lyric.load() }
+    }
+
+    /// Reopens the songs left open last time. Runs after the documents load so
+    /// a remembered id that no longer names a song is simply dropped rather than
+    /// opening an empty section.
+    private func restoreOpenSongs() {
+        let saved = openStore.load()
+        for song in model.songs where saved.contains(song.id) {
+            open(song)
+        }
+        didRestore = true
     }
 
     private func lineCount(_ song: TextDocument) -> Int? {

@@ -465,7 +465,9 @@ struct ScriptView: View {
                 pages: pages,
                 setup: settings.pageSetup,
                 zoomScale: settings.zoomScale,
-                onVisiblePageChanged: { currentPage = $0 })
+                isFitToWidth: settings.isPageZoomFit,
+                onVisiblePageChanged: { currentPage = $0 },
+                onFitZoomChanged: { settings.fitZoom = $0 })
             .overlay(alignment: .bottom) {
                 if pages.count > 0 {
                     PageNavigatorBar(

@@ -44,3 +44,28 @@ struct SendInvitationCommand: Encodable {
     /// A reader rather than a collaborator.
     var viewOnly: Bool
 }
+
+/// One team a collaborator can be invited into.
+///
+/// Inviting an editor requires a team, and the only valid choices are the ones
+/// the project is already assigned to. The server sends this short list — an id
+/// and a name — because `/api/team` is admin-only, so an ordinary editor has no
+/// other way to learn a team's id.
+struct InviteTeam: Decodable, Identifiable, Hashable, HALResource {
+    let id: Int
+    var name: String?
+    let links: HALLinks?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name
+        case links = "_links"
+    }
+
+    var displayName: String {
+        let trimmed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled team" : trimmed
+    }
+
+    static func == (lhs: InviteTeam, rhs: InviteTeam) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}

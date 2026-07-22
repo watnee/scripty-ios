@@ -67,7 +67,7 @@ struct PageNavigatorBar: View {
             Button {
                 settings.resetZoom()
             } label: {
-                Text("\(settings.pageZoom)%")
+                Text("\(settings.effectiveZoom)%")
                     .font(.footnote.monospacedDigit())
                     .frame(width: 44)
             }
@@ -79,6 +79,14 @@ struct PageNavigatorBar: View {
                 label: "Zoom In",
                 disabled: !settings.canZoomIn) {
                     settings.zoomIn()
+                }
+
+            stepper(
+                systemImage: "arrow.left.and.right.square",
+                label: "Fit to Width",
+                disabled: false,
+                isOn: settings.isPageZoomFit) {
+                    settings.toggleFitZoom()
                 }
         }
         .padding(.horizontal, 10)
@@ -99,17 +107,30 @@ struct PageNavigatorBar: View {
         systemImage: String,
         label: String,
         disabled: Bool,
+        isOn: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.footnote.weight(.semibold))
                 .frame(width: 28, height: 24)
+                .background {
+                    if isOn {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.accentColor.opacity(0.18))
+                    }
+                }
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .foregroundStyle(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+        .foregroundStyle(foreground(disabled: disabled, isOn: isOn))
         .accessibilityLabel(label)
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+
+    private func foreground(disabled: Bool, isOn: Bool) -> AnyShapeStyle {
+        if disabled { return AnyShapeStyle(.tertiary) }
+        return isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary)
     }
 
     private func commitTypedPage() {
