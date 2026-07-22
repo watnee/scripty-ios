@@ -110,6 +110,29 @@ struct EditableBlockRow: View {
                       systemImage: block.isBookmarked ? "bookmark.slash" : "bookmark")
             }
         }
+        // The clipboard trio sits in its own section, below the marks and above
+        // the delete — the order the web's block menu uses.
+        Section {
+            Button {
+                model.copyBlocks([block])
+            } label: {
+                Label("Copy Element", systemImage: "doc.on.doc")
+            }
+            if model.canCut(block) {
+                Button {
+                    Task { await model.cutBlocks([block]) }
+                } label: {
+                    Label("Cut Element", systemImage: "scissors")
+                }
+            }
+            if model.canPaste(below: block) {
+                Button {
+                    Task { await model.pasteBlocks(below: block) }
+                } label: {
+                    Label("Paste Below", systemImage: "doc.on.clipboard")
+                }
+            }
+        }
         if block.hasLink(.delete) {
             Button(role: .destructive) {
                 Task { await model.deleteBlock(block) }

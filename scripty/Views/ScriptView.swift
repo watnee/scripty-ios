@@ -573,6 +573,13 @@ struct ScriptView: View {
                     Task { await model.changeType(focused, to: type) }
                 }
             }
+            actions.copyElement = { model.copyBlocks([focused]) }
+            if model.canCut(focused) && !options.isEditingLocked {
+                actions.cutElement = { Task { await model.cutBlocks([focused]) } }
+            }
+            if model.canPaste(below: focused) && !options.isEditingLocked {
+                actions.pasteElements = { Task { await model.pasteBlocks(below: focused) } }
+            }
         }
 
         if model.hasScriptContent {

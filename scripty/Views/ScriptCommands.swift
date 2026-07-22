@@ -31,6 +31,13 @@ struct ScriptActions {
     /// in the Format menu and whether retyping is offered at all.
     var focusedType: BlockType?
 
+    /// The clipboard, at the level of whole elements rather than of the text
+    /// inside one. Nil when nothing is focused, or when the pasteboard holds
+    /// nothing worth pasting.
+    var copyElement: (() -> Void)?
+    var cutElement: (() -> Void)?
+    var pasteElements: (() -> Void)?
+
     var find: (() -> Void)?
     var outline: (() -> Void)?
     var titlePage: (() -> Void)?
@@ -93,6 +100,23 @@ struct ScriptCommands: Commands {
             Button("Redo") { actions?.redo?() }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!(actions?.canRedo ?? false))
+        }
+
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            // Shifted, and named for what they act on, because ⌘C and ⌘V
+            // belong to the words inside the element the writer is typing in.
+            // Taking those would mean a copy did something different depending
+            // on where the caret happened to be.
+            Button("Copy Element") { actions?.copyElement?() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(actions?.copyElement == nil)
+            Button("Cut Element") { actions?.cutElement?() }
+                .keyboardShortcut("x", modifiers: [.command, .shift])
+                .disabled(actions?.cutElement == nil)
+            Button("Paste Elements Below") { actions?.pasteElements?() }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .disabled(actions?.pasteElements == nil)
         }
 
         CommandGroup(after: .undoRedo) {

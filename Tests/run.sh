@@ -43,6 +43,16 @@ swiftc -o "$BUILD/pagination" \
 "$BUILD/pagination" || status=1
 
 echo
+echo "== Element clipboard =="
+swiftc -o "$BUILD/clipboard" \
+    "$SRC/Models/Block.swift" \
+    "$SRC/Models/ScriptClipboard.swift" \
+    "$SRC/Models/FountainDetect.swift" \
+    "${SHARED[@]}" \
+    "$ROOT/Tests/Clipboard/main.swift"
+"$BUILD/clipboard" || status=1
+
+echo
 echo "== Script view options =="
 swiftc -o "$BUILD/viewoptions" \
     "$SRC/State/ScriptViewOptions.swift" \
