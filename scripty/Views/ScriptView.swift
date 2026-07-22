@@ -653,7 +653,11 @@ struct ScriptView: View {
                 } label: {
                     Label("Outline", systemImage: "list.bullet.indent")
                 }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+                // ⌘⇧O is outline *mode*, in the View menu below and in the Mac
+                // menu bar. The panel took the same keys until now, which meant
+                // one of the two won by responder order and the other silently
+                // did nothing.
+                .keyboardShortcut("o", modifiers: [.command, .option])
 
                 if model.canSelectBlocks && !settings.isPageView {
                     Button {

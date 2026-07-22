@@ -70,6 +70,10 @@ struct ScriptCommands: Commands {
     /// the shared store the same way.
     private let appearance = AppearanceSettings.shared
 
+    /// Help belongs to no window either, and a `Commands` body cannot present
+    /// a sheet — so the menu sets the flag and the root view opens it.
+    private let help = HelpPresentation.shared
+
     @FocusedValue(\.scriptActions) private var actions
 
     var body: some Commands {
@@ -85,8 +89,11 @@ struct ScriptCommands: Commands {
             Divider()
             Button("Title Page…") { actions?.titlePage?() }
                 .disabled(actions?.titlePage == nil)
+            // ⌘⌥P, not ⌘⇧P: the toolbar's Page View toggle already claims that
+            // chord, as the browser does, and two views binding one chord means
+            // whichever loses the responder race silently does nothing.
             Button("Page Setup…") { actions?.pageSetup?() }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(actions?.pageSetup == nil)
         }
 
@@ -133,6 +140,15 @@ struct ScriptCommands: Commands {
 
         CommandGroup(after: .toolbar) {
             viewMenu
+        }
+
+        // The stock Help menu points at a help book this app does not ship, so
+        // it is replaced rather than added to: an item that opens nothing is
+        // worse company for these two than no item at all.
+        CommandGroup(replacing: .help) {
+            Button("Scripty Help") { help.screen = .help }
+            Button("Keyboard Shortcuts") { help.screen = .shortcuts }
+                .keyboardShortcut("/", modifiers: .command)
         }
     }
 

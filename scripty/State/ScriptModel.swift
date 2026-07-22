@@ -955,6 +955,10 @@ final class ScriptModel {
             (.exportSongPdf, "PDF", "pdf"),
             (.exportSongDocx, "Word", "docx"),
             (.exportSongEpub, "EPUB", "epub"),
+            // The odd one out: the others are documents to read, this is a
+            // score to open in a notation program — and it is the format the
+            // song importer reads back.
+            (.exportSongMusicXml, "MusicXML", "musicxml"),
         ]
         return all.compactMap { rel, label, ext in
             document.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
@@ -970,6 +974,8 @@ final class ScriptModel {
             (.exportSongsPdf, "PDF", "pdf"),
             (.exportSongsDocx, "Word", "docx"),
             (.exportSongsEpub, "EPUB", "epub"),
+            // Every song as sections of one score; MusicXML has no second piece.
+            (.exportSongsMusicXml, "MusicXML", "musicxml"),
         ]
         return all.compactMap { rel, label, ext in
             documentsLinks[rel].map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
