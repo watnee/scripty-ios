@@ -93,6 +93,7 @@ echo
 echo "== Demo backend API contract =="
 swiftc -o "$BUILD/api" \
     "$SRC/Demo/DemoBackend.swift" \
+    "$SRC/Demo/DemoMusicXml.swift" \
     "$SRC/API/APIClient.swift" \
     "$SRC/API/APIError.swift" \
     "$SRC/API/AppConfig.swift" \
@@ -111,6 +112,7 @@ swiftc -o "$BUILD/unsaved" \
     "$SRC/API/Credentials.swift" \
     "$SRC/API/KeychainStore.swift" \
     "$SRC/Demo/DemoBackend.swift" \
+    "$SRC/Demo/DemoMusicXml.swift" \
     "$SRC/State/AppModel.swift" \
     "$SRC/State/ScriptModel.swift" \
     "$SRC/State/PresentationSettings.swift" \

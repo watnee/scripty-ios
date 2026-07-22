@@ -509,7 +509,10 @@ struct SongsView: View {
 
     private var importTypes: [UTType] {
         var types: [UTType] = [.plainText, .text, .pdf, .rtf]
-        for ext in ["fountain", "fdx", "docx", "doc"] {
+        // A score imports as its lyric, so it belongs in the picker beside the
+        // document formats. `musicxml` and `mxl` are declared in Info.plist —
+        // iOS knows neither — so unlike the others these resolve.
+        for ext in ["fountain", "fdx", "docx", "doc", "musicxml", "mxl"] {
             if let type = UTType(filenameExtension: ext) { types.append(type) }
         }
         return types
