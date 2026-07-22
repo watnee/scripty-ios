@@ -13,6 +13,9 @@ import UIKit
 struct EditableBlockRow: View {
     let model: ScriptModel
     let block: Block
+    /// Shared with every other row, so only the element being typed into can
+    /// have a list open.
+    let autocomplete: ScriptAutocomplete
     /// Opens the comment thread for an element. Handed in so the sheet lives
     /// on the script view rather than one per row.
     var onComment: (Block) -> Void = { _ in }
@@ -32,7 +35,7 @@ struct EditableBlockRow: View {
     }
 
     var body: some View {
-        BlockTextView(model: model, block: block,
+        BlockTextView(model: model, block: block, autocomplete: autocomplete,
                       font: uiFont, alignment: nsAlignment, autocapitalize: capitalization,
                       spellChecks: spellChecks,
                       accessibilityLabel: accessibilityDescription)
@@ -46,6 +49,31 @@ struct EditableBlockRow: View {
             .frame(maxWidth: .infinity)
             .overlay(alignment: .topTrailing) { badges }
             .contextMenu { contextMenu }
+            .overlay(alignment: .bottomLeading) { suggestionList }
+            // A list hanging below the line has to draw over the elements it
+            // covers, which in a LazyVStack means winning on z order.
+            .zIndex(isSuggesting ? 1 : 0)
+    }
+
+    private var isSuggesting: Bool {
+        autocomplete.isOpen && autocomplete.blockId == block.id
+    }
+
+    /// The completions for the line being typed, hung under it.
+    ///
+    /// Anchored to the row's *bottom* and then pushed down by its own height,
+    /// so it sits below the line rather than on top of it and needs no
+    /// measurement of either.
+    @ViewBuilder
+    private var suggestionList: some View {
+        if isSuggesting {
+            ScriptSuggestionList(autocomplete: autocomplete) { suggestion in
+                let block = block
+                autocomplete.clear()
+                Task { await model.accept(suggestion, on: block) }
+            }
+            .alignmentGuide(.bottom) { $0[.top] }
+        }
     }
 
     /// Names the element type — and any badge — for VoiceOver, which otherwise

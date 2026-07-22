@@ -36,6 +36,9 @@ struct ScriptView: View {
     @State private var navigator = ScriptNavigator()
     @State private var search = ScriptSearchModel()
     @State private var selection = BlockSelectionModel()
+    /// One list for the whole script: only the element being typed into can
+    /// have suggestions open, so there is nothing per-row to keep.
+    @State private var autocomplete = ScriptAutocomplete()
 
     /// Presentation is a device preference shared across every project, so the
     /// model is the app-wide one rather than one per script.
@@ -481,7 +484,7 @@ struct ScriptView: View {
             }
             .blockReorderDrag(block, in: model)
         } else if block.isEditable && !options.isEditingLocked {
-            EditableBlockRow(model: model, block: block) { commented in
+            EditableBlockRow(model: model, block: block, autocomplete: autocomplete) { commented in
                 commentTarget = commented
             }
         } else {

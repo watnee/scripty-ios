@@ -53,6 +53,16 @@ swiftc -o "$BUILD/clipboard" \
 "$BUILD/clipboard" || status=1
 
 echo
+echo "== Autocomplete =="
+swiftc -o "$BUILD/suggestions" \
+    "$SRC/Models/Block.swift" \
+    "$SRC/Models/Person.swift" \
+    "$SRC/Models/ScriptSuggestions.swift" \
+    "${SHARED[@]}" \
+    "$ROOT/Tests/Suggestions/main.swift"
+"$BUILD/suggestions" || status=1
+
+echo
 echo "== Script view options =="
 swiftc -o "$BUILD/viewoptions" \
     "$SRC/State/ScriptViewOptions.swift" \
