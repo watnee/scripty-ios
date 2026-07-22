@@ -1003,7 +1003,8 @@ func run() async {
     // A song exports on its own, in the formats SongExportService offers. Like
     // script export, these sit outside the edit gate — a reader can take a copy.
     // Song-only: a note has no song layout, so it carries none of these links.
-    for rel in ["exportSongTxt", "exportSongPdf", "exportSongDocx", "exportSongEpub"] {
+    for rel in ["exportSongTxt", "exportSongPdf", "exportSongDocx", "exportSongEpub",
+                "exportSongMusicXml"] {
         check("a song advertises `\(rel)`",
               (songDoc["_links"] as? [String: Any])?[rel] != nil)
         check("a note does not advertise `\(rel)`",
@@ -1084,6 +1085,7 @@ func run() async {
     await checkSongTrashAndHistory(pid: pid)
     await checkProjectAccess(pid: pid)
     await checkSongSelection(pid: pid)
+    await checkMusicXmlRoundTrip(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
@@ -1210,7 +1212,8 @@ func checkBundleExports(pid: Int) async {
         json(await be.respond(method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data)
     }
 
-    let songbookRels = ["exportSongsTxt", "exportSongsPdf", "exportSongsDocx", "exportSongsEpub"]
+    let songbookRels = ["exportSongsTxt", "exportSongsPdf", "exportSongsDocx", "exportSongsEpub",
+                        "exportSongsMusicXml"]
     let collection = await documents()
     check("the document collection advertises every songbook format",
           songbookRels.allSatisfy { links(collection)[$0] != nil },
@@ -1662,6 +1665,64 @@ func checkProjectAccess(pid: Int) async {
 /// in the trash. The narrowing rides on the songbook link's own `ids`
 /// parameter rather than on a second rel, so the check follows the advertised
 /// href and adds ids to it exactly as the client does.
+/// The one export a writer is meant to open and work on rather than read, and
+/// the only one that comes home again: a song leaves as a score, is set to
+/// music somewhere else, and is imported back as a song. The `importDocument`
+/// rel carries it in both directions, so nothing new is advertised for the
+/// return leg — which is exactly what has to be checked, since a client that
+/// looked for an `importSong` rel would find none and offer nothing.
+func checkMusicXmlRoundTrip(pid: Int) async {
+    // Two verses, so the blank line between them has to survive too — it is
+    // the shape of the song, not whitespace.
+    let lyric = "Hold the line\nWait for morning\n\nNothing here is ours\nNothing here"
+    guard let songId = json(await be.respond(
+        method: "POST", url: url("/api/document"),
+        body: body(["projectId": pid, "title": "Round Trip",
+                    "documentType": "SONG", "content": lyric])).data)["id"] as? Int else {
+        check("a song to export as a score", false)
+        return
+    }
+
+    let song = json(await be.respond(method: "GET", url: url("/api/document/\(songId)"), body: nil).data)
+    guard let href = (links(song)["exportSongMusicXml"] as? [String: Any])?["href"] as? String,
+          let scoreURL = URL(string: href) else {
+        check("the score link is followable", false)
+        return
+    }
+
+    let downloaded = await be.respond(method: "GET", url: scoreURL, body: nil)
+    let score = String(data: downloaded.data, encoding: .utf8) ?? ""
+    check("following the score link returns a file", downloaded.status == 200 && !score.isEmpty,
+          "got \(downloaded.status)")
+    check("the file is a MusicXML score", score.contains("<score-partwise"))
+    check("the score is named after the song", score.contains("<work-title>Round Trip</work-title>"))
+    check("the words are laid under the staff", score.contains("<text>morning</text>"))
+    // Without this a reader cannot tell where the writer's lines ended, and the
+    // lyric comes back as one run-on line.
+    check("the score records where the lines end", score.contains("<end-line/>"))
+    check("and where the verses end", score.contains("<end-paragraph/>"))
+
+    // --- and back in through the same import the other formats use ---
+    let bd = APIClient.multipartBoundary
+    let multipart = "--\(bd)\r\nContent-Disposition: form-data; name=\"projectId\"\r\n\r\n\(pid)\r\n"
+        + "--\(bd)\r\nContent-Disposition: form-data; name=\"type\"\r\n\r\nSONG\r\n"
+        + "--\(bd)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"round-trip.musicxml\"\r\n"
+        + "Content-Type: application/vnd.recordare.musicxml+xml\r\n\r\n\(score)\r\n--\(bd)--\r\n"
+    let imported = await be.respond(method: "POST", url: url("/api/document/import"),
+                                    body: Data(multipart.utf8))
+    check("importing a score -> 200", imported.status == 200, "got \(imported.status)")
+    let reimported = json(imported.data)
+    check("the score's lyric survives the round trip",
+          reimported["content"] as? String == lyric,
+          "got \(reimported["content"] ?? "nil")")
+    // The filename would have said "round-trip"; the score itself says better.
+    check("the song is named by the score, not the file",
+          reimported["title"] as? String == "Round Trip",
+          "got \(reimported["title"] ?? "nil")")
+    check("and it comes back as a song",
+          reimported["documentType"] as? String == "SONG")
+}
+
 func checkSongSelection(pid: Int) async {
     func documents() async -> [String: Any] {
         json(await be.respond(method: "GET", url: url("/api/document?projectId=\(pid)"), body: nil).data)

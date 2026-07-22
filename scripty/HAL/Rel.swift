@@ -73,12 +73,24 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let exportSongDocx = Rel("exportSongDocx")
     static let exportSongEpub = Rel("exportSongEpub")
 
+    /// The lyric as a score, for setting to music in a notation program. The
+    /// odd one out among the song exports: the others are documents to read,
+    /// this one is meant to be opened and worked on — and it is the format
+    /// `importDocument` reads back, so a song can make the round trip through
+    /// MuseScore or Finale and come home.
+    static let exportSongMusicXml = Rel("exportSongMusicXml")
+
     /// The project's songs gathered into one songbook, in the same formats.
     /// Advertised on the document collection, and only when it holds a song.
     static let exportSongsTxt = Rel("exportSongsTxt")
     static let exportSongsPdf = Rel("exportSongsPdf")
     static let exportSongsDocx = Rel("exportSongsDocx")
     static let exportSongsEpub = Rel("exportSongsEpub")
+
+    /// Every song as sections of one score. MusicXML has no notion of a second
+    /// piece in the same file, so the songbook becomes one score in which each
+    /// song is a titled section on its own page.
+    static let exportSongsMusicXml = Rel("exportSongsMusicXml")
 
     /// Replace the set of characters an actor auditions for in a project.
     /// Advertised on a project-scoped actor only — auditions have no meaning

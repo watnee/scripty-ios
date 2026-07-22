@@ -1027,7 +1027,8 @@ actor DemoBackend {
         ]
         if (documents[projectId] ?? []).contains(where: { $0.documentType == "SONG" }) {
             for (rel, format) in [("exportSongsTxt", "txt"), ("exportSongsPdf", "pdf"),
-                                  ("exportSongsDocx", "docx"), ("exportSongsEpub", "epub")] {
+                                  ("exportSongsDocx", "docx"), ("exportSongsEpub", "epub"),
+                                  ("exportSongsMusicXml", "musicxml")] {
                 links[rel] = link("/api/document/export-songs?projectId=\(projectId)&format=\(format)")
             }
             // Deleting a selection is songs-only and an edit, so it rides with
@@ -1045,6 +1046,12 @@ actor DemoBackend {
         switch format {
         case "pdf":
             return (200, minimalPDF(title: document.title))
+        case "musicxml":
+            // A real score, not a shell: this is the one export the demo can
+            // produce faithfully, and the one whose file is meant to come back.
+            return (200, DemoMusicXml.score(
+                title: document.title,
+                sections: [DemoMusicXml.Section(title: nil, lyrics: document.content)]))
         default:
             let header = document.title.isEmpty ? "" : document.title + "\n\n"
             return (200, Data((header + document.content).utf8))
@@ -1064,6 +1071,10 @@ actor DemoBackend {
         switch format {
         case "pdf":
             return (200, minimalPDF(title: title))
+        case "musicxml":
+            return (200, DemoMusicXml.score(
+                title: title,
+                sections: songs.map { DemoMusicXml.Section(title: $0.title, lyrics: $0.content) }))
         default:
             let book = songs
                 .map { ($0.title.isEmpty ? "" : $0.title + "\n\n") + $0.content }
@@ -1116,8 +1127,14 @@ actor DemoBackend {
               documents[projectId] != nil else { return badRequest("projectId") }
         let type = normalizeDocumentType(parsed.fields["type"]) ?? "SONG"
         let rawName = parsed.fileName ?? "Imported"
-        let title = (rawName as NSString).deletingPathExtension
-        let content = String(data: parsed.fileData ?? Data(), encoding: .utf8) ?? ""
+        var title = (rawName as NSString).deletingPathExtension
+        var content = String(data: parsed.fileData ?? Data(), encoding: .utf8) ?? ""
+        // A score carries its own words and its own name, so neither the raw
+        // markup nor the filename is what the song should end up with.
+        if let score = DemoMusicXml.read(parsed.fileData ?? Data()) {
+            content = score.lyrics
+            if let declared = score.title, !declared.isEmpty { title = declared }
+        }
         let document = addDocument(projectId: projectId,
                                    title: title.isEmpty ? "Imported" : title,
                                    type: type, content: content)
@@ -1162,6 +1179,10 @@ actor DemoBackend {
             links["exportSongPdf"] = link("/api/document/\(document.id)/export-song?format=pdf")
             links["exportSongDocx"] = link("/api/document/\(document.id)/export-song?format=docx")
             links["exportSongEpub"] = link("/api/document/\(document.id)/export-song?format=epub")
+            // The score, which unlike the rest is meant to be opened and worked
+            // on — and read back in through `importDocument`.
+            links["exportSongMusicXml"] =
+                link("/api/document/\(document.id)/export-song?format=musicxml")
         }
         var json: [String: Any] = [
             "id": document.id,

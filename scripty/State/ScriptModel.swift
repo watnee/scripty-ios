@@ -946,6 +946,7 @@ final class ScriptModel {
             (.exportSongPdf, "PDF", "pdf"),
             (.exportSongDocx, "Word", "docx"),
             (.exportSongEpub, "EPUB", "epub"),
+            (.exportSongMusicXml, "MusicXML", "musicxml"),
         ]
         return all.compactMap { rel, label, ext in
             document.link(rel).map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
@@ -961,6 +962,7 @@ final class ScriptModel {
             (.exportSongsPdf, "PDF", "pdf"),
             (.exportSongsDocx, "Word", "docx"),
             (.exportSongsEpub, "EPUB", "epub"),
+            (.exportSongsMusicXml, "MusicXML", "musicxml"),
         ]
         return all.compactMap { rel, label, ext in
             documentsLinks[rel].map { ExportOption(rel: rel, label: label, fileExtension: ext, link: $0) }
