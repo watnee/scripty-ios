@@ -154,6 +154,13 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     static let sendInvitation = Rel("sendInvitation")
     static let revoke = Rel("revoke")
 
+    /// The teams a collaborator can be invited into. Inviting an editor needs
+    /// a team, and only the project's own teams are valid choices, so without
+    /// this list the "Can edit" invitation cannot be sent at all. Advertised on
+    /// the invitation collection even when the project has no teams — an empty
+    /// list is the answer that tells the sender to assign one first.
+    static let inviteTeams = Rel("inviteTeams")
+
     /// Who can already see a project, which is a different question from who
     /// has been invited to it: a role or a team grants access with no
     /// invitation involved, so the invitation list alone never answers it.

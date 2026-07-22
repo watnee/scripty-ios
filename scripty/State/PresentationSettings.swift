@@ -32,7 +32,16 @@ final class PresentationSettings {
     /// Percentage, 80–200 in steps of ten.
     var textSize: Int {
         didSet {
-            textSize = min(Self.maxTextSize, max(Self.minTextSize, textSize))
+            // Clamp by re-assigning only when it actually changes something.
+            // `@Observable` rewrites these into computed properties, so a
+            // `didSet` that writes back to itself unconditionally re-enters
+            // forever rather than settling — the write-back has to be the
+            // exception, and the re-entry then does the storing.
+            let clamped = min(Self.maxTextSize, max(Self.minTextSize, textSize))
+            if clamped != textSize {
+                textSize = clamped
+                return
+            }
             guard textSize != oldValue else { return }
             defaults.set(textSize, forKey: Key.textSize)
         }
@@ -135,19 +144,80 @@ final class PresentationSettings {
     /// to the page — the sheet and its contents zoom together.
     var pageZoom: Int {
         didSet {
-            pageZoom = min(Self.maxZoom, max(Self.minZoom, pageZoom))
+            // See the note on `textSize` — the clamp must not write back
+            // unconditionally.
+            let clamped = min(Self.maxZoom, max(Self.minZoom, pageZoom))
+            if clamped != pageZoom {
+                pageZoom = clamped
+                return
+            }
             guard pageZoom != oldValue else { return }
-            defaults.set(pageZoom, forKey: Key.pageZoom)
+            persistZoom()
         }
     }
 
-    var zoomScale: Double { Double(pageZoom) / 100.0 }
-    var canZoomIn: Bool { pageZoom < Self.maxZoom }
-    var canZoomOut: Bool { pageZoom > Self.minZoom }
+    /// Fit-to-width: the sheet is sized to the space it has rather than to a
+    /// percentage. Like the web app this shares the zoom key, storing the
+    /// literal "fit" where a number would otherwise go.
+    var isPageZoomFit: Bool {
+        didSet {
+            guard isPageZoomFit != oldValue else { return }
+            persistZoom()
+        }
+    }
 
-    func zoomIn() { pageZoom += Self.zoomStep }
-    func zoomOut() { pageZoom -= Self.zoomStep }
-    func resetZoom() { pageZoom = Self.defaultZoom }
+    /// What fit currently works out to. The page view measures it and reports
+    /// it back — the sheet's unzoomed width depends on the window, full-width
+    /// mode and the paper size, so it cannot be computed from settings alone.
+    /// Not persisted: it is a fact about this window, not a preference.
+    var fitZoom = defaultZoom {
+        didSet {
+            // See the note on `textSize`.
+            let clamped = min(Self.maxZoom, max(Self.minZoom, fitZoom))
+            guard clamped != fitZoom else { return }
+            fitZoom = clamped
+        }
+    }
+
+    /// The zoom actually in force, which is what the navigator shows.
+    var effectiveZoom: Int { isPageZoomFit ? fitZoom : pageZoom }
+
+    var zoomScale: Double { Double(effectiveZoom) / 100.0 }
+    var canZoomIn: Bool { effectiveZoom < Self.maxZoom }
+    var canZoomOut: Bool { effectiveZoom > Self.minZoom }
+
+    /// Stepping away from fit starts from whatever fit resolved to, so the
+    /// first press nudges the size on screen rather than jumping back to 100%.
+    func zoomIn() { stepZoom(by: Self.zoomStep) }
+    func zoomOut() { stepZoom(by: -Self.zoomStep) }
+
+    private func stepZoom(by delta: Int) {
+        let from = effectiveZoom
+        isPageZoomFit = false
+        pageZoom = from + delta
+    }
+
+    func resetZoom() {
+        isPageZoomFit = false
+        pageZoom = Self.defaultZoom
+    }
+
+    /// A second press on an active Fit returns to 100%, matching the web.
+    func toggleFitZoom() {
+        if isPageZoomFit {
+            resetZoom()
+        } else {
+            isPageZoomFit = true
+        }
+    }
+
+    private func persistZoom() {
+        if isPageZoomFit {
+            defaults.set(Key.fitValue, forKey: Key.pageZoom)
+        } else {
+            defaults.set(pageZoom, forKey: Key.pageZoom)
+        }
+    }
 
     // MARK: - Page setup
 
@@ -171,6 +241,8 @@ final class PresentationSettings {
         static let focusMode = "scripty-focus-mode"
         static let fullWidth = "scripty-screenplay-full-width"
         static let pageZoom = "scripty-page-zoom"
+        /// What the zoom key holds when fit-to-width is on — the web's spelling.
+        static let fitValue = "fit"
         static let pageSetup = "scripty-page-setup"
         /// Stored as "1"/"0" rather than a boolean — the web's spelling.
         static let outlineMode = "scripty-outline-mode"
@@ -191,6 +263,9 @@ final class PresentationSettings {
         textSize = min(Self.maxTextSize,
                        max(Self.minTextSize, storedTextSize ?? Self.defaultTextSize))
 
+        // The zoom key holds either a percentage or the literal "fit"; an
+        // unreadable value means neither, so it falls back to 100%.
+        isPageZoomFit = defaults.string(forKey: Key.pageZoom) == Key.fitValue
         let storedZoom = defaults.object(forKey: Key.pageZoom) as? Int
         pageZoom = min(Self.maxZoom, max(Self.minZoom, storedZoom ?? Self.defaultZoom))
 

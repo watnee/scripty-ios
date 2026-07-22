@@ -34,6 +34,10 @@ final class InvitationsModel {
 
     private(set) var invitations: [Invitation] = []
     private(set) var people: [ProjectAccessUser] = []
+    /// The teams a collaborator can be invited into — the project's own. Empty
+    /// where the project has no teams, which is a real state: a collaborator
+    /// cannot be invited until the project is assigned one.
+    private(set) var inviteTeams: [InviteTeam] = []
     private(set) var links = HALLinks()
     private(set) var isLoading = false
     private(set) var isWorking = false
@@ -45,6 +49,11 @@ final class InvitationsModel {
     var canInvite: Bool { links.contains(.sendInvitation) }
     var canSuggest: Bool { contactsSource != nil }
     var knowsWhoHasAccess: Bool { accessSource != nil }
+
+    /// A collaborator can only be invited if the project has a team to invite
+    /// them into. The server enforces this; the client hides the "Can edit"
+    /// path rather than offering an invitation it knows will be rejected.
+    var canInviteCollaborator: Bool { !inviteTeams.isEmpty }
 
     var collaborators: [Invitation] { invitations.filter { !$0.isViewOnly } }
     var readers: [Invitation] { invitations.filter(\.isViewOnly) }
@@ -71,7 +80,22 @@ final class InvitationsModel {
                 report(error)
             }
         }
+        await loadInviteTeams()
         await loadAccess()
+    }
+
+    /// The teams a collaborator may be invited into, advertised on the
+    /// invitation collection. Quiet on failure like the access list: an empty
+    /// list simply hides the collaborator path, the same as a project with no
+    /// teams, rather than raising an alert over the invite form.
+    private func loadInviteTeams() async {
+        guard let link = links[.inviteTeams] else {
+            inviteTeams = []
+            return
+        }
+        if let collection: HALCollection<InviteTeam> = try? await app.client.fetch(from: link) {
+            inviteTeams = collection.items
+        }
     }
 
     /// Quiet on failure. This list is context beside the invitations, and an
@@ -86,13 +110,19 @@ final class InvitationsModel {
 
     /// Invites an address. Answers the same whether or not that address already
     /// has an account — the server will not say, so the client cannot either.
+    ///
+    /// A collaborator invitation must name one of the project's teams; a reader
+    /// invitation takes none. Passing a `teamId` the project does not own is the
+    /// server's to reject, so this sends what the caller chose from `inviteTeams`.
     @discardableResult
-    func invite(_ email: String, viewOnly: Bool) async -> Bool {
+    func invite(_ email: String, viewOnly: Bool, teamId: Int? = nil) async -> Bool {
         guard let link = links[.sendInvitation] else { return false }
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return await act(link, method: "POST",
-                         body: SendInvitationCommand(email: trimmed, teamId: nil, viewOnly: viewOnly))
+                         body: SendInvitationCommand(email: trimmed,
+                                                     teamId: viewOnly ? nil : teamId,
+                                                     viewOnly: viewOnly))
     }
 
     /// Looks up contacts matching what has been typed so far, debounced so a

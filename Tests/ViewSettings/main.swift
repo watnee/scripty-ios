@@ -158,12 +158,94 @@ func runAppearance() {
           AppearanceSettings(defaults: store).appearance, AppearanceSettings.Appearance.system)
 }
 
+@MainActor
+func runZoomAndTextSizeBounds() {
+    print("")
+    print("Zoom and type size stay in bounds")
+    let store = scratch("bounds")
+    let settings = PresentationSettings(defaults: store)
+
+    // These clamp themselves in a `didSet`, which under `@Observable` is a
+    // property observer on a *computed* property — so a clamp that writes back
+    // unconditionally recurses until the stack gives out. Every check here is
+    // really asking "does setting this at all still return?".
+    settings.pageZoom = 140
+    check("an in-range zoom is taken as given", settings.pageZoom, 140)
+    check("and is stored", store.object(forKey: "scripty-page-zoom") as? Int ?? 0, 140)
+
+    settings.pageZoom = 5000
+    check("too far in is pulled back to the maximum", settings.pageZoom, 200)
+    check("and the pulled-back value is what gets stored",
+          store.object(forKey: "scripty-page-zoom") as? Int ?? 0, 200)
+
+    settings.pageZoom = 1
+    check("too far out is pulled back to the minimum", settings.pageZoom, 50)
+
+    settings.textSize = 120
+    check("an in-range type size is taken as given", settings.textSize, 120)
+    settings.textSize = 1000
+    check("an outsized one is pulled back", settings.textSize, 200)
+    settings.textSize = 0
+    check("and so is a vanishing one", settings.textSize, 80)
+
+    // The steppers are the surface a writer actually touches.
+    settings.resetZoom()
+    settings.zoomIn()
+    check("zooming in steps up", settings.pageZoom, 110)
+    settings.zoomOut()
+    check("and back down again", settings.pageZoom, 100)
+}
+
+@MainActor
+func runFitToWidth() {
+    print("")
+    print("Fit to width")
+    let store = scratch("fittowidth")
+    let settings = PresentationSettings(defaults: store)
+    check("a first run zooms by percentage", settings.isPageZoomFit, false)
+    check("and that percentage is 100", settings.effectiveZoom, 100)
+
+    settings.isPageZoomFit = true
+    check("fit is stored as the literal the web writes",
+          store.string(forKey: "scripty-page-zoom") ?? "", "fit")
+    check("fit survives a relaunch",
+          PresentationSettings(defaults: store).isPageZoomFit, true)
+
+    // The percentage on show is whatever the page view measured, not the one
+    // stored — that is the whole point of a measured mode.
+    settings.fitZoom = 150
+    check("the readout follows the measurement", settings.effectiveZoom, 150)
+
+    // Stepping away from fit starts from what fit resolved to, so the first
+    // press nudges the size on screen rather than jumping back to 100%.
+    settings.zoomOut()
+    check("stepping away leaves fit", settings.isPageZoomFit, false)
+    check("and starts from the measured size", settings.pageZoom, 140)
+    check("which is what gets stored",
+          store.object(forKey: "scripty-page-zoom") as? Int ?? 0, 140)
+
+    // A second press on an active Fit returns to 100%, as in the web app.
+    settings.toggleFitZoom()
+    check("toggling turns fit on", settings.isPageZoomFit, true)
+    settings.toggleFitZoom()
+    check("toggling again leaves fit", settings.isPageZoomFit, false)
+    check("at 100%", settings.pageZoom, 100)
+
+    // An unreadable value means neither a percentage nor fit.
+    store.set("enormous", forKey: "scripty-page-zoom")
+    let odd = PresentationSettings(defaults: store)
+    check("nonsense is not fit", odd.isPageZoomFit, false)
+    check("nonsense falls back to 100%", odd.pageZoom, 100)
+}
+
 MainActor.assumeIsolated {
     runWordCount()
     runOutlineMode()
     runSpellcheck()
     runIgnoredWords()
     runAppearance()
+    runZoomAndTextSizeBounds()
+    runFitToWidth()
 }
 
 print("")
