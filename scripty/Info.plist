@@ -21,6 +21,60 @@
 		</dict>
 	</array>
 
+	<!-- MusicXML, which no version of iOS declares. Without this the file
+	     picker greys out every score, because a type it has never heard of
+	     cannot be in a list of allowed types. Imported rather than exported:
+	     the format is Recordare's, and other apps on the device may well have
+	     a better claim to it. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.recordare.musicxml</string>
+			<key>UTTypeDescription</key>
+			<string>MusicXML Score</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.xml</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>musicxml</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.recordare.musicxml+xml</string>
+				</array>
+			</dict>
+		</dict>
+		<!-- The zipped form, which is what MuseScore writes by default. It is
+		     an archive rather than XML, so it cannot share the declaration
+		     above however alike the two look from the outside. -->
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.recordare.musicxml.compressed</string>
+			<key>UTTypeDescription</key>
+			<string>Compressed MusicXML Score</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mxl</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.recordare.musicxml</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
 	<!-- Payload for dragging a script element onto another to reorder it.
 	     Declared so a drop only accepts elements dragged from this app; a
 	     plain-text type would let any dragged text land on the script. -->
