@@ -20,6 +20,10 @@ DerivedData/
 .swiftpm/
 .build/
 
+# What scripts/install.sh remembers about this Mac — a signing team and, if the
+# default was taken, a bundle id. Both are personal, neither is a build input.
+.scripty-install
+
 # Finder and editor leftovers.
 .DS_Store
 *.swp

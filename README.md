@@ -54,32 +54,41 @@ sudo xcode-select --switch /Applications/Xcode.app
 ./scripts/install.sh
 ```
 
-Plug the device in over USB, unlock it, tap Trust, and run that. It picks the
-connected device, finds your signing team, builds, installs, and launches.
+Run that, then plug the device in over USB and unlock it. It waits for a device
+rather than telling you it found none, finds your signing team, builds,
+installs, and launches.
 
 ```sh
 ./scripts/install.sh --list                      # show paired devices
-./scripts/install.sh --device "Clint iPhone"     # if more than one is plugged in
+./scripts/install.sh --device "Clint iPhone"     # skip the question when several
 ./scripts/install.sh --team ABCDE12345           # if you have more than one team
-./scripts/install.sh --bundle-id com.you.scripty # if the default is taken
+./scripts/install.sh --bundle-id com.you.scripty # a name of your choosing
 ./scripts/install.sh --demo                      # start in the offline demo
 ./scripts/install.sh --no-launch                 # install without launching
+./scripts/install.sh --forget                    # drop the remembered answers
 ```
 
 Unlike the simulator, a real device insists the app be signed. A free Apple ID
-is enough. Four things commonly stand in the way, and the script says so in
-words rather than leaving you in the build log:
+is enough. Four things commonly stand in the way, and the script handles three
+of them while you watch rather than leaving you in the build log:
 
-- **No certificate.** Open Xcode > Settings > Accounts, add your Apple ID, and
-  let it create a development certificate. Then rerun.
-- **Developer Mode is off.** Settings > Privacy & Security > Developer Mode on
-  the device, then restart it.
+- **Developer Mode is off.** It says so and waits: Settings > Privacy &
+  Security > Developer Mode on the device, then restart it.
 - **The bundle id is taken.** The default is `scripty.scripty`, which is
-  registered to this project's team. Anyone else needs their own:
-  `--bundle-id com.yourname.scripty`.
+  registered to this project's team, so the first build by anyone else fails.
+  The script then names the app after your team — `com.<teamid>.scripty` — and
+  builds again. Pass `--bundle-id` if you would rather choose.
 - **The app installs but won't open.** A free Apple ID signs with a certificate
   the device does not trust until you say so: Settings > General > VPN & Device
-  Management > tap your Apple ID > Trust.
+  Management > tap your Apple ID > Trust. The script waits for that tap and
+  starts the app once you've made it.
+- **No certificate.** This one it cannot do for you: open Xcode > Settings >
+  Accounts, add your Apple ID, let it create a development certificate, and
+  rerun.
+
+Your team, and the bundle id if it had to pick one, are remembered in
+`.scripty-install` so later runs need no flags. Waiting and asking need a
+terminal — run from a script or CI and it reports the same problems and stops.
 
 Apps signed with a free Apple ID stop working after seven days. Rerun
 `install.sh` to renew them.

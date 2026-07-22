@@ -117,11 +117,15 @@ ARGS=()
 if [ -n "$DEVICE_NAME" ]; then
     ARGS=(--device "$DEVICE_NAME")
 elif [ "$(wc -l <<<"$CONNECTED")" -gt 1 ]; then
-    # install.sh refuses to guess between several, and it is right to.
-    echo "Several devices are connected:"
-    sed 's/^/  /' <<<"$CONNECTED"
-    echo "Pick one:  ./scripts/run.sh --device \"$(head -1 <<<"$CONNECTED")\"" >&2
-    exit 1
+    # Neither script guesses between several devices; install.sh asks, so let
+    # it, and only say the name of the flag when nobody is there to answer.
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        echo "Several devices are connected:"
+        sed 's/^/  /' <<<"$CONNECTED"
+        echo "Pick one:  ./scripts/run.sh --device \"$(head -1 <<<"$CONNECTED")\"" >&2
+        exit 1
+    fi
+    run ./scripts/install.sh ${EXTRA[@]+"${EXTRA[@]}"}
 fi
 
 echo "$(head -1 <<<"$CONNECTED") is connected — installing there."

@@ -2,7 +2,9 @@
 #
 # Build Scripty and install it on a real iPhone or iPad plugged into this Mac.
 # Unlike scripts/demo.sh (simulator, no signing), this needs a signing team —
-# any free Apple ID team will do.
+# any free Apple ID team will do. It waits for the device, asks when it has to
+# choose, and picks its own bundle id when the default is taken, so the usual
+# answer is to run it with nothing after it.
 #
 #   ./scripts/install.sh                             # the connected device
 #   ./scripts/install.sh --device "Clint iPhone"     # pick a device by name
@@ -11,6 +13,7 @@
 #   ./scripts/install.sh --bundle-id com.you.scripty # if the default is taken
 #   ./scripts/install.sh --demo                      # start in the offline demo
 #   ./scripts/install.sh --no-launch                 # install without launching
+#   ./scripts/install.sh --forget                    # drop the remembered answers
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,10 +26,30 @@ BUNDLE_OVERRIDE="${SCRIPTY_BUNDLE_ID:-}"
 LAUNCH=1
 DEMO=0
 
+# The team and the bundle id are true for this Mac rather than for this run,
+# and a free Apple ID expires the app after seven days, so the second run is
+# never far away. Ask once, keep the answer here.
+CONF=".scripty-install"
+
 usage() {
-    sed -n '3,13p' "$0" | cut -c3-
+    sed -n '3,17p' "$0" | cut -c3-
     exit "${1:-0}"
 }
+
+remembered() {
+    [ -f "$CONF" ] && sed -n "s/^$1=//p" "$CONF" | tail -1
+    return 0
+}
+
+remember() {
+    local rest
+    rest=$(grep -v "^$1=" "$CONF" 2>/dev/null || true)
+    printf '%s\n%s=%s\n' "$rest" "$1" "$2" | sed '/^$/d' >"$CONF"
+}
+
+# Waiting and asking only help someone who is standing there. A script or a CI
+# job wants the error now.
+interactive() { [ -t 0 ] && [ -t 1 ]; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,11 +58,15 @@ while [ $# -gt 0 ]; do
         --bundle-id) BUNDLE_OVERRIDE="${2:-}"; [ -n "$BUNDLE_OVERRIDE" ] || usage 1; shift 2 ;;
         --demo) DEMO=1; shift ;;
         --no-launch) LAUNCH=0; shift ;;
+        --forget) rm -f "$CONF"; echo "Forgot the remembered team and bundle id."; exit 0 ;;
         --list) exec xcrun devicectl list devices ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1" >&2; usage 1 ;;
     esac
 done
+
+[ -n "$TEAM" ] || TEAM=$(remembered TEAM)
+[ -n "$BUNDLE_OVERRIDE" ] || BUNDLE_OVERRIDE=$(remembered BUNDLE_ID)
 
 if ! xcrun -f xcodebuild >/dev/null 2>&1; then
     echo "xcodebuild not found. Install Xcode, then point the tools at it:" >&2
@@ -47,54 +74,137 @@ if ! xcrun -f xcodebuild >/dev/null 2>&1; then
     exit 1
 fi
 
+# Ask for a number rather than making someone rerun the whole command with a
+# flag they now know the value of.
+choose() {
+    local prompt="$1" reply i=1
+    shift
+    echo "$prompt" >&2
+    for option in "$@"; do
+        echo "  $i) $option" >&2
+        i=$((i + 1))
+    done
+    while :; do
+        printf '  Which one? [1] ' >&2
+        read -r reply || return 1
+        [ -n "$reply" ] || reply=1
+        case "$reply" in
+            *[!0-9]*|'') ;;
+            *) if [ "$reply" -ge 1 ] && [ "$reply" -le $# ]; then
+                   eval "printf '%s\n' \"\${$reply}\""
+                   return 0
+               fi ;;
+        esac
+        echo "  Pick a number between 1 and $#." >&2
+    done
+}
+
 # Pick a device. devicectl mixes a human table into --json-output when that is
 # a pipe, so write the JSON to a real file and read it back.
 DEVICES_JSON=$(mktemp -t scripty-devices)
 trap 'rm -f "$DEVICES_JSON"' EXIT
-xcrun devicectl list devices --json-output "$DEVICES_JSON" >/dev/null
 
-TARGET=$(SCRIPTY_DEVICE="$DEVICE" /usr/bin/python3 -c '
+# Prints a status word and then, tab-separated, whatever that status needs: the
+# chosen device for "ok", the names to choose between for "many", one name for
+# the rest. Deciding what to do about it is bash's job below, because most of
+# these are things that stop being true while the script is running.
+survey() {
+    xcrun devicectl list devices --json-output "$DEVICES_JSON" >/dev/null 2>&1 || true
+    SCRIPTY_DEVICE="$DEVICE" /usr/bin/python3 -c '
 import json, os, sys
 
-devices = json.load(open(sys.argv[1]))["result"]["devices"]
+try:
+    devices = json.load(open(sys.argv[1]))["result"]["devices"]
+except Exception:
+    devices = []
 wanted = os.environ.get("SCRIPTY_DEVICE", "")
 
 def name(device):
     return device["deviceProperties"]["name"]
 
+def say(status, *rest):
+    print("\t".join((status,) + rest))
+    raise SystemExit
+
 devices = [d for d in devices
            if d["hardwareProperties"]["platform"] in ("iOS", "iPadOS")
            and d["connectionProperties"]["pairingState"] == "paired"]
 if wanted:
-    devices = [d for d in devices
-               if wanted in (name(d), d["identifier"], d["hardwareProperties"]["udid"])]
-    if not devices:
-        sys.exit(f"No paired device named {wanted!r}. "
-                 "List them with: ./scripts/install.sh --list")
+    named = [d for d in devices
+             if wanted in (name(d), d["identifier"], d["hardwareProperties"]["udid"])]
+    if not named:
+        say("unnamed", wanted)
+    devices = named
 if not devices:
-    sys.exit("No iPhone or iPad is paired with this Mac. Plug one in over USB, "
-             "unlock it, and tap Trust.")
+    say("none")
 
-# A paired device that is not currently reachable would fail deep inside
-# xcodebuild with an unhelpful message, so say so plainly up front — but keep
-# going, since tunnelState lags behind reality right after a device is plugged in.
+# A paired device that is not reachable right now would fail deep inside
+# xcodebuild with an unhelpful message. A phone left at home is paired too.
 live = [d for d in devices if d["connectionProperties"]["tunnelState"] != "unavailable"]
 if not live:
-    listed = ", ".join(name(d) for d in devices)
-    print(f"{listed} is paired but not connected right now. "
-          "Plug it in and unlock it if this fails.", file=sys.stderr)
-elif len(live) > 1 and not wanted:
-    listed = ", ".join(name(d) for d in live)
-    sys.exit(f"Several devices are connected ({listed}). Choose one with: --device NAME")
+    say("asleep", ", ".join(name(d) for d in devices))
+if len(live) > 1 and not wanted:
+    say("many", *(name(d) for d in live))
 
-device = (live or devices)[0]
+device = live[0]
 if device["deviceProperties"].get("developerModeStatus") == "disabled":
-    sys.exit(f"Developer Mode is off on {name(device)}. Turn it on in Settings > "
-             "Privacy & Security > Developer Mode, restart the device, then rerun.")
-print(device["identifier"], device["hardwareProperties"]["udid"], name(device), sep="\t")
-' "$DEVICES_JSON")
+    say("devmode", name(device))
+say("ok", device["identifier"], device["hardwareProperties"]["udid"], name(device))
+' "$DEVICES_JSON"
+}
 
-IFS=$'\t' read -r DEVICE_ID DEVICE_UDID DEVICE_NAME <<<"$TARGET"
+# Plugging a phone in, unlocking it and turning Developer Mode on all happen
+# while the script is running, so say what is missing once and keep looking.
+SAID=""
+if interactive; then THEN=" — waiting…"; else THEN=", then rerun."; fi
+nudge() {
+    local key="$1"
+    shift
+    [ "$SAID" = "$key" ] && return 0
+    SAID="$key"
+    printf '%s\n' "$@" >&2
+}
+
+DEADLINE=$((SECONDS + 180))
+while :; do
+    IFS=$'\t' read -r -a FOUND <<<"$(survey)"
+    case "${FOUND[0]}" in
+        ok)
+            DEVICE_ID="${FOUND[1]}"; DEVICE_UDID="${FOUND[2]}"; DEVICE_NAME="${FOUND[3]}"
+            break ;;
+        many)
+            if interactive; then
+                DEVICE=$(choose "Several devices are connected:" "${FOUND[@]:1}") || exit 1
+                SAID=""
+                continue
+            fi
+            echo "Several devices are connected ($(printf '%s\n' "${FOUND[@]:1}" |
+                paste -sd, - | sed 's/,/, /g'))." >&2
+            echo "Choose one with: --device NAME" >&2
+            exit 1 ;;
+        none)
+            nudge none "No iPhone or iPad is paired with this Mac. Plug one in over USB," \
+                "unlock it, and tap Trust$THEN" ;;
+        asleep)
+            nudge asleep "${FOUND[1]} is paired but not connected right now." \
+                "Plug it in and unlock it$THEN" ;;
+        devmode)
+            nudge devmode "Developer Mode is off on ${FOUND[1]}. Turn it on in Settings >" \
+                "Privacy & Security > Developer Mode and restart the device$THEN" ;;
+        unnamed)
+            echo "No paired device named '${FOUND[1]}'." >&2
+            echo "List them with: ./scripts/install.sh --list" >&2
+            exit 1 ;;
+    esac
+    if ! interactive; then
+        exit 1
+    fi
+    if [ "$SECONDS" -ge "$DEADLINE" ]; then
+        echo "Nothing turned up in three minutes. Rerun when the device is ready." >&2
+        exit 1
+    fi
+    sleep 3
+done
 echo "Device: $DEVICE_NAME"
 
 # Signing on a device is not optional. One team in the keychain is the common
@@ -114,59 +224,104 @@ case "$#" in
        echo "> Accounts, add your Apple ID, and let it create one — a free account is" >&2
        echo "enough. Then rerun, or pass the team id with --team." >&2
        exit 1 ;;
-    1) ;;
-    *) echo "Several signing teams found: $(tr '\n' ' ' <<<"$TEAM")" >&2
-       echo "Pick one with: --team TEAMID" >&2
-       exit 1 ;;
+    1) TEAM="$1" ;;
+    *) if interactive; then
+           TEAM=$(choose "Several signing teams are in your keychain:" "$@") || exit 1
+       else
+           echo "Several signing teams found: $*" >&2
+           echo "Pick one with: --team TEAMID" >&2
+           exit 1
+       fi ;;
 esac
 echo "Team: $TEAM"
+if [ "$TEAM" != "$(remembered TEAM)" ]; then
+    remember TEAM "$TEAM"
+fi
 
 DESTINATION="platform=iOS,id=$DEVICE_UDID"
-OVERRIDES=(-allowProvisioningUpdates "DEVELOPMENT_TEAM=$TEAM")
-[ -n "$BUNDLE_OVERRIDE" ] && OVERRIDES+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_OVERRIDE")
 
 # Ask the build system for the bundle id and the .app path rather than
 # hardcoding them, so renaming the target can't silently break the shortcut.
-SETTINGS=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
-    -destination "$DESTINATION" -configuration Debug "${OVERRIDES[@]}" \
-    -showBuildSettings 2>/dev/null |
-    awk -F' = ' '
-        !id  && /PRODUCT_BUNDLE_IDENTIFIER/ { id = $2 }
-        !dir && /TARGET_BUILD_DIR/          { dir = $2 }
-        !app && /WRAPPER_NAME/              { app = $2 }
-        END { print id; print dir "/" app }')
-BUNDLE_ID=$(sed -n 1p <<<"$SETTINGS")
-APP_PATH=$(sed -n 2p <<<"$SETTINGS")
+# Both move when the bundle id does, so this is read again after that changes.
+settle() {
+    OVERRIDES=(-allowProvisioningUpdates "DEVELOPMENT_TEAM=$TEAM")
+    [ -n "$BUNDLE_OVERRIDE" ] && OVERRIDES+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_OVERRIDE")
+    local settings
+    settings=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+        -destination "$DESTINATION" -configuration Debug "${OVERRIDES[@]}" \
+        -showBuildSettings 2>/dev/null |
+        awk -F' = ' '
+            !id  && /PRODUCT_BUNDLE_IDENTIFIER/ { id = $2 }
+            !dir && /TARGET_BUILD_DIR/          { dir = $2 }
+            !app && /WRAPPER_NAME/              { app = $2 }
+            END { print id; print dir "/" app }')
+    BUNDLE_ID=$(sed -n 1p <<<"$settings")
+    APP_PATH=$(sed -n 2p <<<"$settings")
+    if [ -z "$BUNDLE_ID" ] || [ "$APP_PATH" = "/" ]; then
+        echo "Could not read build settings for scheme '$SCHEME'." >&2
+        exit 1
+    fi
+}
+settle
 
-if [ -z "$BUNDLE_ID" ] || [ "$APP_PATH" = "/" ]; then
-    echo "Could not read build settings for scheme '$SCHEME'." >&2
-    exit 1
+BUILD_LOG=$(mktemp -t scripty-build)
+trap 'rm -f "$DEVICES_JSON" "$BUILD_LOG"' EXIT
+
+build() {
+    echo "Building $SCHEME for $DEVICE_NAME…"
+    xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+        -destination "$DESTINATION" -configuration Debug "${OVERRIDES[@]}" \
+        -quiet build 2>&1 | tee "$BUILD_LOG"
+}
+
+if ! build; then
+    # The default bundle id is registered to this project's team, so everyone
+    # else meets this on their first run. A team id is unique and already
+    # theirs, which makes it the one name the script can pick without asking.
+    if [ -z "$BUNDLE_OVERRIDE" ] &&
+        grep -qEi 'bundle identifier|no profiles for|is not available' "$BUILD_LOG"; then
+        BUNDLE_OVERRIDE="com.$(tr '[:upper:]' '[:lower:]' <<<"$TEAM").scripty"
+        echo
+        echo "'$BUNDLE_ID' belongs to another team, so this build takes an identifier"
+        echo "of its own: $BUNDLE_OVERRIDE"
+        settle
+        build || exit 1
+    else
+        exit 1
+    fi
 fi
-
-echo "Building $SCHEME for $DEVICE_NAME…"
-if ! xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
-    -destination "$DESTINATION" -configuration Debug "${OVERRIDES[@]}" -quiet build; then
-    echo >&2
-    echo "Build failed. If the error mentions the bundle identifier, '$BUNDLE_ID'" >&2
-    echo "is already registered to someone else — pick your own, for example:" >&2
-    echo "  ./scripts/install.sh --bundle-id com.yourname.scripty" >&2
-    exit 1
+if [ -n "$BUNDLE_OVERRIDE" ] && [ "$BUNDLE_OVERRIDE" != "$(remembered BUNDLE_ID)" ]; then
+    remember BUNDLE_ID "$BUNDLE_OVERRIDE"
 fi
 
 echo "Installing…"
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH" >/dev/null
 
-if [ "$LAUNCH" -eq 1 ]; then
+launch() {
     # `--` keeps devicectl from reading the leading-dash demo flag as its own.
-    LAUNCH_ARGS=()
-    [ "$DEMO" -eq 1 ] && LAUNCH_ARGS=(-- -scripty.demo YES)
-    if ! xcrun devicectl device process launch --device "$DEVICE_ID" \
-        --terminate-existing "$BUNDLE_ID" "${LAUNCH_ARGS[@]+"${LAUNCH_ARGS[@]}"}" >/dev/null; then
-        echo >&2
-        echo "Installed, but the app would not start. A free Apple ID signs apps with" >&2
-        echo "a certificate the device does not trust until you approve it: on the" >&2
-        echo "device, Settings > General > VPN & Device Management > tap your Apple ID" >&2
-        echo "> Trust. Then open Scripty from the Home Screen." >&2
+    local args=()
+    [ "$DEMO" -eq 1 ] && args=(-- -scripty.demo YES)
+    xcrun devicectl device process launch --device "$DEVICE_ID" \
+        --terminate-existing "$BUNDLE_ID" "${args[@]+"${args[@]}"}" >/dev/null 2>&1
+}
+
+if [ "$LAUNCH" -eq 1 ] && ! launch; then
+    # A free Apple ID signs with a certificate the device does not trust until
+    # someone taps it through — and that tapping happens now, so keep trying.
+    echo >&2
+    echo "Installed, but the app will not start until $DEVICE_NAME trusts the" >&2
+    echo "certificate that signed it: Settings > General > VPN & Device Management" >&2
+    echo "> tap your Apple ID > Trust." >&2
+    STARTED=0
+    if interactive; then
+        echo "Waiting for that…" >&2
+        for _ in $(seq 24); do
+            sleep 5
+            if launch; then STARTED=1; break; fi
+        done
+    fi
+    if [ "$STARTED" -eq 0 ]; then
+        echo "Then open Scripty from the Home Screen." >&2
         exit 1
     fi
 fi
