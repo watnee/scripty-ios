@@ -165,7 +165,7 @@ struct ActorEditorSheet: View {
         if casting.assignableProjects.count > 1 {
             Section {
                 ForEach(casting.assignableProjects) { project in
-                    Toggle(project.displayName, isOn: Binding(
+                    Toggle(project.displayTitle, isOn: Binding(
                         get: { selectedProjectIds.contains(project.id) },
                         set: { isOn in
                             if isOn { selectedProjectIds.insert(project.id) }

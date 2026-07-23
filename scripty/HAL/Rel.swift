@@ -164,6 +164,13 @@ struct Rel: RawRepresentable, Hashable, Sendable {
     /// list is the answer that tells the sender to assign one first.
     static let inviteTeams = Rel("inviteTeams")
 
+    /// Every team the writer could assign this project to, each flagged whether
+    /// it is assigned now — the project side of the web production page's team
+    /// checkboxes. Distinct from `inviteTeams`, which lists only the teams the
+    /// project already has; this lists the whole roster so a box can be ticked.
+    /// Advertised only to an editor; the write rides on `update`'s `teamIds`.
+    static let projectTeams = Rel("projectTeams")
+
     /// Who can already see a project, which is a different question from who
     /// has been invited to it: a role or a team grants access with no
     /// invitation involved, so the invitation list alone never answers it.
