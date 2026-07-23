@@ -112,8 +112,11 @@ final class CastingModel {
               let link = app.apiRoot?.link(.projects) else { return }
         do {
             let collection: HALCollection<Project> = try await app.client.fetch(from: link)
-            assignableProjects = collection.items.sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            // Explicit parameter types: in this async @MainActor context the
+            // bare `$0`/`$1` closure lets `sorted` resolve to the SortComparator
+            // overload and fails to type-check (Xcode 26 toolchain).
+            assignableProjects = collection.items.sorted { (lhs: Project, rhs: Project) in
+                lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
             }
         } catch {
             // Non-fatal: the sheet falls back to the current project alone.

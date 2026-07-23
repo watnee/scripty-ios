@@ -25,6 +25,9 @@ actor DemoBackend {
         var screenplayTitle: String?
         var contactInfo: String?
         var screenplayVersion: String?
+        /// The teams the project belongs to, by id. Seeded to the one "Demo"
+        /// team every project already showed a badge for.
+        var teamIds: [Int] = [1]
     }
 
     private struct DemoBlock {
@@ -354,7 +357,10 @@ actor DemoBackend {
             return projectCollection()
         case ("POST", 0):
             guard let title = fields["title"] as? String else { return badRequest("title") }
-            let project = DemoProject(id: nextProjectId, title: title, lastEdited: .now)
+            var project = DemoProject(id: nextProjectId, title: title, lastEdited: .now)
+            // The create form may name teams; absent means the seeded default,
+            // matching the badge a new demo project already showed.
+            if let teamIds = intList(fields["teamIds"]) { project.teamIds = teamIds }
             nextProjectId += 1
             projects.append(project)
             blocks[project.id] = []
@@ -379,6 +385,9 @@ actor DemoBackend {
             if let value = fields["writers"] as? String { projects[index].writers = value }
             if let value = fields["contactInfo"] as? String { projects[index].contactInfo = value }
             if let value = fields["screenplayVersion"] as? String { projects[index].screenplayVersion = value }
+            // Absent leaves the assignment alone (a plain rename); present
+            // replaces it wholesale, an empty list clearing every team.
+            if let teamIds = intList(fields["teamIds"]) { projects[index].teamIds = teamIds }
             projects[index].lastEdited = .now
             return ok(projectJSON(projects[index]))
         case ("POST", "import-script"):
@@ -427,6 +436,8 @@ actor DemoBackend {
             return contactSuggestions(matching: query["q"] ?? "")
         case ("GET", "access"):
             return projectAccess(id)
+        case ("GET", "teams"):
+            return projectTeamsCollection(projects[index])
         case ("POST", "toggleDefault"):
             defaultProjectId = (defaultProjectId == id) ? nil : id
             return projectCollection()
@@ -1075,6 +1086,17 @@ actor DemoBackend {
 
     /// The ids of a comma-separated query value, as Spring reads a `List<Integer>`
     /// parameter.
+    /// Coerces a JSON array body field to `[Int]`, or nil when the field is
+    /// absent — which is how a PUT tells "leave the teams alone" apart from
+    /// "set them to none", the same absent-means-unchanged rule the title-page
+    /// fields follow.
+    private func intList(_ value: Any?) -> [Int]? {
+        guard let value else { return nil }
+        if let ints = value as? [Int] { return ints }
+        if let anys = value as? [Any] { return anys.compactMap { $0 as? Int } }
+        return nil
+    }
+
     private func idList(_ value: String?) -> [Int] {
         (value ?? "").split(separator: ",").compactMap { Int($0) }
     }
@@ -3082,16 +3104,22 @@ actor DemoBackend {
     }
 
     private func projectJSON(_ project: DemoProject) -> [String: Any] {
+        // Names looked up from the team store by the ids the project carries,
+        // so the badge tracks a reassignment instead of always saying "Demo".
+        let teamNames = project.teamIds.compactMap { id in
+            teamsStore.first(where: { $0.id == id })?.name
+        }
         var json: [String: Any] = [
             "id": project.id,
             "title": project.title,
             "lastEdited": iso.string(from: project.lastEdited),
-            "teams": ["Demo"],
+            "teams": teamNames,
             "default": project.id == defaultProjectId,
             "_links": [
                 "self": link("/api/project/\(project.id)"),
                 "update": link("/api/project/\(project.id)"),
                 "delete": link("/api/project/\(project.id)"),
+                "projectTeams": link("/api/project/\(project.id)/teams"),
                 "toggleDefault": link("/api/project/\(project.id)/toggleDefault"),
                 "blocks": link("/api/block?projectId=\(project.id)"),
                 "characters": link("/api/person?projectId=\(project.id)"),
@@ -3119,6 +3147,30 @@ actor DemoBackend {
         if let value = project.contactInfo { json["contactInfo"] = value }
         if let value = project.screenplayVersion { json["screenplayVersion"] = value }
         return json
+    }
+
+    /// Every team the project could belong to, each flagged whether it does now
+    /// — the `projectTeams` collection. The roster is the whole team store (the
+    /// real server offers `teamService.list()`), unlike `inviteTeams`, which
+    /// shows only the teams already on the project. Sorted by name to match.
+    private func projectTeamsCollection(_ project: DemoProject) -> (Int, Data) {
+        let items = teamsStore
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { team -> [String: Any] in
+                ["id": team.id, "name": team.name, "assigned": project.teamIds.contains(team.id)]
+            }
+        var payload: [String: Any] = [
+            "_links": [
+                "self": link("/api/project/\(project.id)/teams"),
+                // Where the ticked ids go back — the write is the project's PUT.
+                "update": link("/api/project/\(project.id)"),
+                "project": link("/api/project/\(project.id)"),
+            ],
+        ]
+        if !items.isEmpty {
+            payload["_embedded"] = ["projectTeamOptionResourceList": items]
+        }
+        return ok(payload)
     }
 
     /// The block collection, with the affordances the real server advertises:

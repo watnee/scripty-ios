@@ -41,6 +41,9 @@ struct ProjectsSidebarView: View {
     /// the server has said where the trash is.
     @State private var trashLink: HALLink?
     @State private var renamingProject: Project?
+    /// The project whose team assignment is being edited — the per-project
+    /// production-teams picker, distinct from the global `teamsLink` above.
+    @State private var assigningTeamsProject: Project?
     /// The API root's `teams` link, present only for a user who may manage
     /// them. Held so the sheet opens from the link, not a bare flag.
     @State private var teamsLink: HALLink?
@@ -268,6 +271,16 @@ struct ProjectsSidebarView: View {
                 }
                 .tint(.blue)
             }
+            // Only an editor is offered the picker — the server advertises
+            // `projectTeams` on that gate, so a reader's row shows nothing here.
+            if project.hasLink(.projectTeams) {
+                Button {
+                    assigningTeamsProject = project
+                } label: {
+                    Label("Teams", systemImage: "person.2")
+                }
+                .tint(.indigo)
+            }
         }
     }
 
@@ -386,6 +399,9 @@ struct ProjectsSidebarView: View {
             ProjectTitleSheet(title: project.title ?? "", heading: "Rename Project") { title in
                 await model.rename(project, to: title)
             }
+        }
+        .sheet(item: $assigningTeamsProject) { project in
+            ProjectTeamsSheet(model: model, project: project)
         }
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: [.json],
@@ -577,6 +593,100 @@ private struct ProjectTitleSheet: View {
         isSaving = true
         Task {
             let succeeded = await action(trimmed)
+            isSaving = false
+            if succeeded { dismiss() }
+        }
+    }
+}
+
+/// The per-project team assignment: the web production page's "Teams"
+/// checkboxes. Lists every team the writer could assign the project to (from
+/// `projectTeams`), ticks the ones it belongs to now, and saves the ticked ids
+/// back through the project's `update` affordance.
+///
+/// Saving with nothing ticked is allowed on purpose: unlike an actor, which is
+/// only reachable through a project's cast, a project with no teams is still
+/// reached from the writer's own list, so leaving it teamless is a real choice
+/// (it just cannot take collaborators until a team is added).
+private struct ProjectTeamsSheet: View {
+    let model: ProjectListModel
+    let project: Project
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var options: [ProjectTeamOption] = []
+    @State private var selected: Set<Int> = []
+    @State private var isLoading = true
+    @State private var isSaving = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                } else if options.isEmpty {
+                    Section {
+                        Text("No teams yet.")
+                        Text("Create a team from the sidebar's Teams screen to share this screenplay with collaborators.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section {
+                        ForEach(options) { option in
+                            Toggle(option.name, isOn: binding(for: option.id))
+                        }
+                    } header: {
+                        Text("Teams")
+                    } footer: {
+                        Text("This screenplay appears in casting and sharing for each selected team.")
+                    }
+                }
+            }
+            .navigationTitle("Teams")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Save") { save() }
+                            .disabled(isLoading)
+                    }
+                }
+            }
+            .task { await load() }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func binding(for id: Int) -> Binding<Bool> {
+        Binding(
+            get: { selected.contains(id) },
+            set: { isOn in
+                if isOn { selected.insert(id) } else { selected.remove(id) }
+            }
+        )
+    }
+
+    private func load() async {
+        let loaded = await model.loadProjectTeams(project) ?? []
+        options = loaded
+        selected = Set(loaded.filter(\.assigned).map(\.id))
+        isLoading = false
+    }
+
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        Task {
+            let succeeded = await model.updateProjectTeams(project, teamIds: selected.sorted())
             isSaving = false
             if succeeded { dismiss() }
         }

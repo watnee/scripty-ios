@@ -1116,8 +1116,63 @@ func run() async {
     await checkReplaceOne(pid: pid)
     await checkDocumentInsert(pid: pid)
     await checkActorProjects()
+    await checkProjectTeams(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
+}
+
+/// A project can be assigned to teams from its own row (the web production
+/// page's team checkboxes). `projectTeams` lists every team with an `assigned`
+/// flag so the picker pre-ticks the right boxes; the write rides on `update`'s
+/// `teamIds`, and omitting that field leaves the assignment alone.
+func checkProjectTeams(pid: Int) async {
+    let project = json(await be.respond(method: "GET", url: url("/api/project/\(pid)"), body: nil).data)
+    check("project advertises `projectTeams`", links(project)["projectTeams"] != nil)
+
+    func options() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/project/\(pid)/teams"), body: nil).data))
+    }
+    // The seeded "Demo" team (id 1) is listed and ticked to start.
+    let initial = await options()
+    check("seeded team is listed and assigned",
+          initial.first { $0["id"] as? Int == 1 }?["assigned"] as? Bool == true,
+          "got \(initial)")
+
+    // A newly created team shows up as an option the project does not have yet.
+    let camera = json(await be.respond(method: "POST", url: url("/api/team"),
+        body: body(["name": "Camera"])).data)
+    let cameraId = camera["id"] as! Int
+    check("a new team appears unassigned",
+          (await options()).first { $0["id"] as? Int == cameraId }?["assigned"] as? Bool == false)
+
+    // Reassign the project to Camera only, exactly as the sheet does: the
+    // ticked ids sent back through update's teamIds.
+    let title = project["title"] as? String ?? "Demo"
+    let reassigned = json(await be.respond(method: "PUT", url: url("/api/project/\(pid)"),
+        body: body(["title": title, "teamIds": [cameraId]])).data)
+    check("update re-badges the project",
+          (reassigned["teams"] as? [String]) == ["Camera"], "got \(reassigned["teams"] ?? "nil")")
+    let afterReassign = await options()
+    check("the previous team is now unticked",
+          afterReassign.first { $0["id"] as? Int == 1 }?["assigned"] as? Bool == false)
+    check("the chosen team is now ticked",
+          afterReassign.first { $0["id"] as? Int == cameraId }?["assigned"] as? Bool == true)
+
+    // A plain rename (no teamIds) must not disturb the assignment.
+    let renamed = json(await be.respond(method: "PUT", url: url("/api/project/\(pid)"),
+        body: body(["title": "Renamed"])).data)
+    check("omitting teamIds leaves the teams alone",
+          (renamed["teams"] as? [String]) == ["Camera"], "got \(renamed["teams"] ?? "nil")")
+
+    // Unassigning every team is a valid end state, not an error.
+    let cleared = json(await be.respond(method: "PUT", url: url("/api/project/\(pid)"),
+        body: body(["title": title, "teamIds": [Int]()])).data)
+    check("teams can be cleared to none",
+          (cleared["teams"] as? [String])?.isEmpty == true, "got \(cleared["teams"] ?? "nil")")
+
+    // Restore the seeded assignment so later runs start where they expect.
+    _ = await be.respond(method: "PUT", url: url("/api/project/\(pid)"),
+        body: body(["title": title, "teamIds": [1]]))
 }
 
 /// An actor can be cast in more than one project at once, and editing that set

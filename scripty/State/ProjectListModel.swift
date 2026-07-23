@@ -123,6 +123,49 @@ final class ProjectListModel {
         }
     }
 
+    /// Every team the project could belong to, each flagged whether it does
+    /// now — the production page's team checkboxes. Nil when the caller cannot
+    /// manage teams (no `projectTeams` link), which is how the row decides
+    /// whether to offer the action at all.
+    func loadProjectTeams(_ project: Project) async -> [ProjectTeamOption]? {
+        guard let link = project.link(.projectTeams) else { return nil }
+        do {
+            let collection: HALCollection<ProjectTeamOption> = try await app.client.fetch(from: link)
+            errorMessage = nil
+            // Explicit parameter types force the `sorted(by:)` overload; the bare
+            // `$0`/`$1` form fails to type-check in this async @MainActor context
+            // on the Xcode 26 toolchain (see CastingModel.loadAssignableProjects).
+            return collection.items.sorted { (lhs: ProjectTeamOption, rhs: ProjectTeamOption) in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Reassigns the project to exactly `teamIds`. The write rides on `update`
+    /// (the same PUT a rename uses), so the current title has to travel with it
+    /// — the server requires a non-blank title, and omitting the title-page
+    /// fields leaves the front matter untouched. Refreshes so the row's team
+    /// badge reflects the new set.
+    @discardableResult
+    func updateProjectTeams(_ project: Project, teamIds: [Int]) async -> Bool {
+        guard let link = project.link(.update) else { return false }
+        do {
+            let _: Project = try await app.client.fetch(
+                from: link, method: "PUT",
+                body: EditProjectCommand(title: project.title ?? project.displayTitle,
+                                         teamIds: teamIds))
+            await refresh()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
     /// Toggle this project as the user's default (the web list's star). The
     /// server returns the refreshed collection with updated `default` flags.
     func toggleDefault(_ project: Project) async {
