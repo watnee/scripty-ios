@@ -1161,23 +1161,24 @@ actor DemoBackend {
             return ok(["inserted": 0, "projectId": projectId, "firstBlockId": NSNull()])
         }
         snapshot(projectId)
-        var current = blocks[projectId] ?? []
-        // Determine insertion order: after the given block, else append.
-        var order: Int
-        if let afterBlockId, let anchor = current.first(where: { $0.id == afterBlockId }) {
-            order = anchor.order
-        } else {
-            order = current.map(\.order).max() ?? 0
-        }
-        var firstId: Int?
-        for line in lines {
-            order += 1
-            let block = DemoBlock(id: nextBlockId, order: order, content: line, type: type)
-            if firstId == nil { firstId = block.id }
+        var current = (blocks[projectId] ?? []).sorted { $0.order < $1.order }
+        let newBlocks = lines.map { line -> DemoBlock in
+            let block = DemoBlock(id: nextBlockId, order: 0, content: line, type: type)
             nextBlockId += 1
-            current.append(block)
+            return block
         }
-        blocks[projectId] = current.sorted { $0.order < $1.order }
+        let firstId = newBlocks.first?.id
+        // Drop the lines in right after the anchor, else append. Renumber the
+        // whole list so the new lines sit in sequence rather than colliding
+        // with the orders already in use — the same move `below` and the block
+        // move make.
+        if let afterBlockId, let anchor = current.firstIndex(where: { $0.id == afterBlockId }) {
+            current.insert(contentsOf: newBlocks, at: anchor + 1)
+        } else {
+            current.append(contentsOf: newBlocks)
+        }
+        for i in current.indices { current[i].order = i + 1 }
+        blocks[projectId] = current
         touch(projectId)
         return ok(["inserted": lines.count,
                    "projectId": projectId,

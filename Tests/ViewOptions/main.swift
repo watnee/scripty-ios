@@ -172,8 +172,11 @@ func run() {
         check("a fresh workspace opens collapsed", state.load().isEmpty, true)
 
         state.save([3, 1, 2])
+        // Compared as a sorted array, not the set itself: `check` stringifies
+        // its arguments, and a Set's description order is randomised per run,
+        // so `\(Set([1,2,3]))` alone made this pass or fail by luck.
         check("the open set survives reopening",
-              SongWorkspaceOpenState(projectId: 7, defaults: store).load(), Set([1, 2, 3]))
+              SongWorkspaceOpenState(projectId: 7, defaults: store).load().sorted(), [1, 2, 3])
         check("it lands in the web's dot-spelled key",
               store.string(forKey: "scripty.songWorkspace.open.7") ?? "", "[1,2,3]")
         check("it is remembered per project",

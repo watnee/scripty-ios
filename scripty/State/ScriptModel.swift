@@ -885,6 +885,27 @@ final class ScriptModel {
         }
     }
 
+    /// Songs that can be dropped into the screenplay — the ones the server
+    /// advertised an `insert` link on, i.e. those the caller may edit. Split
+    /// from notes so the block menu can offer the web's two create-below
+    /// sections ("Songs" / "Notes").
+    var insertableSongs: [TextDocument] {
+        documents.filter { $0.kind == .song && $0.link(.insert) != nil }
+    }
+
+    /// Notes (anything that is not a song) that can be dropped into the
+    /// screenplay, gated the same way — an `insert` link the caller can use.
+    var insertableNotes: [TextDocument] {
+        documents.filter { $0.kind != .song && $0.link(.insert) != nil }
+    }
+
+    /// Whether there is anything to insert, so the block menu can drop the
+    /// whole section when the project has no songs or notes, or the caller
+    /// cannot edit.
+    var canInsertDocuments: Bool {
+        !insertableSongs.isEmpty || !insertableNotes.isEmpty
+    }
+
     @discardableResult
     func shareDocument(_ document: TextDocument, email: String) async -> Bool {
         guard let link = document.link(.shareEmail) else { return false }
