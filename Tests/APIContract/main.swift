@@ -1114,6 +1114,7 @@ func run() async {
     await checkSongSelection(pid: pid)
     await checkMusicXmlRoundTrip(pid: pid)
     await checkReplaceOne(pid: pid)
+    await checkDocumentInsert(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
@@ -1939,6 +1940,70 @@ func checkReplaceOne(pid: Int) async {
 
     _ = await be.respond(method: "PUT", url: url("/api/block/\(bid)"),
                          body: body(["content": original]))
+}
+
+/// Dropping a song's lyrics or a note's text into the script at a chosen point
+/// — the block menu's "Insert Song" / "Insert Note". The endpoint took an
+/// `afterBlockId` all along; what the client gained is a way to send one, so
+/// this pins that a positioned insert lands right after the anchor rather than
+/// at the end, that a song goes in as lyric lines and a note as action, and
+/// that an omitted anchor still appends (the songs list's long-standing way).
+func checkDocumentInsert(pid: Int) async {
+    let song = json(await be.respond(method: "POST", url: url("/api/document"),
+        body: body(["projectId": pid, "title": "Insert Me", "documentType": "SONG",
+                    "content": "First inserted line\nSecond inserted line"])).data)
+    check("a document advertises `insert`", links(song)["insert"] != nil,
+          "got \(links(song).keys.sorted())")
+    guard let href = (links(song)["insert"] as? [String: Any])?["href"] as? String,
+          let insertURL = URL(string: href) else {
+        check("the insert link is followable", false)
+        return
+    }
+
+    func script() async -> [[String: Any]] {
+        embedded(json(await be.respond(method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data))
+    }
+
+    var blocks = await script()
+    guard blocks.count >= 2, let anchorId = blocks.first?["id"] as? Int else {
+        check("a script with an anchor to insert after was found", false)
+        return
+    }
+    let countBefore = blocks.count
+
+    let placed = json(await be.respond(method: "POST", url: insertURL,
+        body: body(["afterBlockId": anchorId])).data)
+    check("insert reports how many lines it added", placed["inserted"] as? Int == 2,
+          "got \(placed["inserted"] ?? "nil")")
+
+    blocks = await script()
+    check("a positioned insert lands right after the anchor",
+          blocks.first?["id"] as? Int == anchorId
+              && blocks[1]["content"] as? String == "First inserted line"
+              && blocks[2]["content"] as? String == "Second inserted line",
+          "got \(blocks.prefix(3).map { $0["content"] as? String ?? "?" })")
+    check("a song inserts as lyric lines", blocks[1]["type"] as? String == "LYRICS",
+          "got \(blocks[1]["type"] ?? "nil")")
+    check("the whole document went in", blocks.count == countBefore + 2,
+          "\(countBefore) -> \(blocks.count)")
+    check("orders stay contiguous after an insert",
+          blocks.enumerated().allSatisfy { $1["order"] as? Int == $0 + 1 })
+
+    // No anchor: the lines append at the very end, the way the songs list has
+    // always inserted, and a note goes in as action rather than lyrics.
+    let note = json(await be.respond(method: "POST", url: url("/api/document"),
+        body: body(["projectId": pid, "title": "A Note", "documentType": "NOTES",
+                    "content": "A trailing note line"])).data)
+    if let noteHref = (links(note)["insert"] as? [String: Any])?["href"] as? String,
+       let noteURL = URL(string: noteHref) {
+        _ = await be.respond(method: "POST", url: noteURL, body: body([:]))
+        blocks = await script()
+        check("an insert with no anchor appends at the end",
+              blocks.last?["content"] as? String == "A trailing note line",
+              "got \(blocks.last?["content"] as? String ?? "nil")")
+        check("a note inserts as action lines", blocks.last?["type"] as? String == "ACTION",
+              "got \(blocks.last?["type"] ?? "nil")")
+    }
 }
 
 await run()

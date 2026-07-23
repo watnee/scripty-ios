@@ -98,6 +98,10 @@ struct ScriptView: View {
         }
         .task {
             await model.loadEverything()
+            // The block menu can drop a song or note into the script, so the
+            // list has to be in hand before a menu opens. Quiet, like editions:
+            // an empty project just shows no insert section.
+            await model.loadDocuments()
             model.startSyncPolling()
             repaginate()
             // Loaded quietly: most projects have a single edition and should

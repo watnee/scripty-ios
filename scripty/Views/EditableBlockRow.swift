@@ -138,6 +138,26 @@ struct EditableBlockRow: View {
                       systemImage: block.isBookmarked ? "bookmark.slash" : "bookmark")
             }
         }
+        // A per-block highlight, the way the web's block menu offers it. It
+        // rides the bulk-format link with a single id rather than a dedicated
+        // per-block endpoint, so one tap is one undo step — the same call the
+        // multi-select bar makes, just without entering selection mode first.
+        if model.canBulkFormat && block.isEditable {
+            Menu {
+                ForEach(BlockHighlight.allCases) { colour in
+                    Button {
+                        Task { await model.bulkSetHighlight([block.id], highlight: colour) }
+                    } label: {
+                        Label(colour.label, systemImage: "circle.fill")
+                    }
+                }
+                Button("None") {
+                    Task { await model.bulkSetHighlight([block.id], highlight: nil) }
+                }
+            } label: {
+                Label("Highlight", systemImage: "highlighter")
+            }
+        }
         // The clipboard trio sits in its own section, below the marks and above
         // the delete — the order the web's block menu uses.
         Section {
@@ -158,6 +178,35 @@ struct EditableBlockRow: View {
                     Task { await model.pasteBlocks(below: block) }
                 } label: {
                     Label("Paste Below", systemImage: "doc.on.clipboard")
+                }
+            }
+        }
+        // Drop a song's lyrics or a note's text in right here — the web's
+        // create-below "Songs" / "Notes" sections, which let a writer place a
+        // document at a chosen point rather than only appending it to the end.
+        if model.canInsertDocuments {
+            Section {
+                if !model.insertableSongs.isEmpty {
+                    Menu {
+                        ForEach(model.insertableSongs) { document in
+                            Button(document.displayTitle) {
+                                Task { await model.insertDocument(document, afterBlockId: block.id) }
+                            }
+                        }
+                    } label: {
+                        Label("Insert Song", systemImage: "music.note")
+                    }
+                }
+                if !model.insertableNotes.isEmpty {
+                    Menu {
+                        ForEach(model.insertableNotes) { document in
+                            Button(document.displayTitle) {
+                                Task { await model.insertDocument(document, afterBlockId: block.id) }
+                            }
+                        }
+                    } label: {
+                        Label("Insert Note", systemImage: "note.text")
+                    }
                 }
             }
         }
