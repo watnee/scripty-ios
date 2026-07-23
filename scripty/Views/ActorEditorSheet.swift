@@ -19,6 +19,7 @@ struct ActorEditorSheet: View {
     @State private var last: String
     @State private var phone: String
     @State private var email: String
+    @State private var selectedProjectIds: Set<Int>
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var pickedPhoto: PhotosPickerItem?
@@ -31,14 +32,23 @@ struct ActorEditorSheet: View {
         _last = State(initialValue: actor?.last ?? "")
         _phone = State(initialValue: actor?.phone ?? "")
         _email = State(initialValue: actor?.email ?? "")
+        // Edit pre-checks the actor's current projects; a new actor starts in
+        // the project the cast list was opened from, matching the web form's
+        // default when it arrives with a project in hand.
+        _selectedProjectIds = State(initialValue:
+            Set(actor?.projectIds ?? [casting.project.id]))
     }
 
     /// A name is the only thing the cast list can't do without; contact
-    /// details are optional, but a typed email has to look like one.
+    /// details are optional, but a typed email has to look like one. An actor
+    /// must stay in at least one project — unlike the web's global actor
+    /// directory, this client only reaches an actor through a project's cast,
+    /// so one with none would be orphaned and unreachable.
     private var canSave: Bool {
         !first.trimmingCharacters(in: .whitespaces).isEmpty
             && !last.trimmingCharacters(in: .whitespaces).isEmpty
             && emailIsPlausible
+            && !selectedProjectIds.isEmpty
             && !isSaving
     }
 
@@ -70,6 +80,7 @@ struct ActorEditorSheet: View {
                         .keyboardType(.phonePad)
                         .textContentType(.telephoneNumber)
                 }
+                projectsSection
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(.red)
@@ -77,6 +88,7 @@ struct ActorEditorSheet: View {
             }
             .navigationTitle(actor == nil ? "New Actor" : "Edit Actor")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await casting.loadAssignableProjects() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -139,6 +151,31 @@ struct ActorEditorSheet: View {
             .onChange(of: pickedPhoto) { _, picked in
                 guard let picked else { return }
                 Task { await upload(picked, for: actor) }
+            }
+        }
+    }
+
+    /// The projects this actor is cast in. One actor can appear in several, so
+    /// the web offers a checkbox per project; this mirrors it with a toggle per
+    /// project once the wider list has loaded. Hidden when there is nothing to
+    /// choose between — a lone project is always the current one and can't be
+    /// unchecked anyway.
+    @ViewBuilder
+    private var projectsSection: some View {
+        if casting.assignableProjects.count > 1 {
+            Section {
+                ForEach(casting.assignableProjects) { project in
+                    Toggle(project.displayName, isOn: Binding(
+                        get: { selectedProjectIds.contains(project.id) },
+                        set: { isOn in
+                            if isOn { selectedProjectIds.insert(project.id) }
+                            else { selectedProjectIds.remove(project.id) }
+                        }))
+                }
+            } header: {
+                Text("Projects")
+            } footer: {
+                Text("This actor appears in casting for each selected project.")
             }
         }
     }
@@ -210,18 +247,21 @@ struct ActorEditorSheet: View {
         let trimmedLast = last.trimmingCharacters(in: .whitespaces)
         let trimmedPhone = phone.trimmingCharacters(in: .whitespaces)
         let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
+        let projectIds = Array(selectedProjectIds).sorted()
         Task {
             let succeeded: Bool
             if let actor {
                 succeeded = await casting.updateActor(
                     actor, first: trimmedFirst, last: trimmedLast,
                     phone: trimmedPhone.isEmpty ? nil : trimmedPhone,
-                    email: trimmedEmail.isEmpty ? nil : trimmedEmail)
+                    email: trimmedEmail.isEmpty ? nil : trimmedEmail,
+                    projectIds: projectIds)
             } else {
                 succeeded = await casting.createActor(
                     first: trimmedFirst, last: trimmedLast,
                     phone: trimmedPhone.isEmpty ? nil : trimmedPhone,
-                    email: trimmedEmail.isEmpty ? nil : trimmedEmail)
+                    email: trimmedEmail.isEmpty ? nil : trimmedEmail,
+                    projectIds: projectIds)
             }
             isSaving = false
             if succeeded {

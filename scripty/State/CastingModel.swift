@@ -20,6 +20,13 @@ final class CastingModel {
     private(set) var actorsLinks = HALLinks()
     private(set) var isLoading = false
 
+    /// Every project the caller can see, for the actor editor's project picker.
+    /// The web actor form lists all of the user's projects and lets one actor
+    /// be cast in several; this client reaches casting per project, so it has
+    /// to fetch the wider set on demand. Loaded lazily and cached for the
+    /// lifetime of the sheet.
+    private(set) var assignableProjects: [Project] = []
+
     /// False once the server has told us casting is off-limits (403) or never
     /// advertised the collection at all. Views hide the section rather than
     /// showing an error the user can do nothing about.
@@ -96,6 +103,23 @@ final class CastingModel {
         return actors.first { $0.id == id }
     }
 
+    /// Fetches the projects the editor can assign an actor to — the root's
+    /// `projects` collection, the same set the projects sidebar shows. Fails
+    /// quietly: the picker simply keeps the current project as the only choice
+    /// if the wider list can't be loaded, so a create still works offline.
+    func loadAssignableProjects() async {
+        guard assignableProjects.isEmpty,
+              let link = app.apiRoot?.link(.projects) else { return }
+        do {
+            let collection: HALCollection<Project> = try await app.client.fetch(from: link)
+            assignableProjects = collection.items.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        } catch {
+            // Non-fatal: the sheet falls back to the current project alone.
+        }
+    }
+
     // MARK: - Mutations (all gated by link presence)
 
     /// The collection advertises a POST target only for users who may add
@@ -103,13 +127,14 @@ final class CastingModel {
     var canCreate: Bool { isAvailable && collectionLink != nil }
 
     @discardableResult
-    func createActor(first: String, last: String, phone: String?, email: String?) async -> Bool {
+    func createActor(first: String, last: String, phone: String?, email: String?,
+                     projectIds: [Int]) async -> Bool {
         guard let link = collectionLink else { return false }
         do {
             let _: ScriptyActor = try await app.client.fetch(
                 from: link, method: "POST",
                 body: CreateActorCommand(first: first, last: last, phone: phone,
-                                         email: email, projectIds: [project.id]))
+                                         email: email, projectIds: projectIds))
             await load()
             errorMessage = nil
             return true
@@ -121,14 +146,14 @@ final class CastingModel {
 
     @discardableResult
     func updateActor(_ actor: ScriptyActor, first: String, last: String,
-                     phone: String?, email: String?) async -> Bool {
+                     phone: String?, email: String?, projectIds: [Int]) async -> Bool {
         guard let link = actor.link(.update) else { return false }
         do {
             let _: ScriptyActor = try await app.client.fetch(
                 from: link, method: "PUT",
                 body: EditActorCommand(first: first, last: last, phone: phone,
                                        email: email,
-                                       projectIds: actor.projectIds ?? [project.id]))
+                                       projectIds: projectIds))
             headshotCache[actor.id] = nil
             await load()
             errorMessage = nil

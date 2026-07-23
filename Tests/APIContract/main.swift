@@ -1115,8 +1115,43 @@ func run() async {
     await checkMusicXmlRoundTrip(pid: pid)
     await checkReplaceOne(pid: pid)
     await checkDocumentInsert(pid: pid)
+    await checkActorProjects()
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
+}
+
+/// An actor can be cast in more than one project at once, and editing that set
+/// moves them between projects. This is what ActorEditorSheet's project picker
+/// sends: the whole `projectIds` list, which the demo backend must round-trip
+/// for the picker to pre-check the right boxes and for the cast lists to update.
+func checkActorProjects() async {
+    let projects = embedded(json(await be.respond(method: "GET", url: url("/api/project"), body: nil).data))
+    let pids = projects.compactMap { $0["id"] as? Int }
+    guard pids.count >= 2 else {
+        check("two demo projects available for multi-cast check", false, "got \(pids.count)")
+        return
+    }
+    let pidA = pids[0], pidB = pids[1]
+    let multi = json(await be.respond(method: "POST", url: url("/api/actor"),
+        body: body(["first": "Grace", "last": "Hopper", "projectIds": [pidA, pidB]])).data)
+    let mid = multi["id"] as! Int
+    check("actor projectIds round-trips both projects",
+          Set(multi["projectIds"] as? [Int] ?? []) == Set([pidA, pidB]),
+          "got \(multi["projectIds"] ?? "nil")")
+    let inA = embedded(json(await be.respond(method: "GET", url: url("/api/actor?projectId=\(pidA)"), body: nil).data))
+    let inB = embedded(json(await be.respond(method: "GET", url: url("/api/actor?projectId=\(pidB)"), body: nil).data))
+    check("multi-project actor appears in both cast lists",
+          inA.contains { $0["id"] as? Int == mid } && inB.contains { $0["id"] as? Int == mid })
+    // Narrowing the set to just B drops the actor from A's cast list — what
+    // happens when the writer unchecks a project in the editor.
+    let edited = json(await be.respond(method: "PUT", url: url("/api/actor/\(mid)"),
+        body: body(["id": mid, "first": "Grace", "last": "Hopper", "projectIds": [pidB]])).data)
+    check("editing projectIds narrows the set",
+          Set(edited["projectIds"] as? [Int] ?? []) == Set([pidB]),
+          "got \(edited["projectIds"] ?? "nil")")
+    let inA2 = embedded(json(await be.respond(method: "GET", url: url("/api/actor?projectId=\(pidA)"), body: nil).data))
+    check("actor removed from a deselected project",
+          !inA2.contains { $0["id"] as? Int == mid })
 }
 
 /// Which elements have discussion on them, in one call. The client paints a
