@@ -29,8 +29,10 @@ rather do it by hand, `git clone` this repository and read on.
 If a terminal is not your thing, skip the command entirely: download this
 repository (the green **Code** button > **Download ZIP**, or `git clone`) and
 double-click **Install Scripty.command** inside it. Finder opens it in a
-Terminal window and it does exactly what the one-liner does. Three siblings sit
+Terminal window and it does exactly what the one-liner does. Four siblings sit
 next to it for the other things you might want without typing a command —
+**Install on iPhone or iPad.command** (build a signed copy and put it on a
+plugged-in device, waiting for one instead of falling back to the demo),
 **Try Scripty (Demo).command** (the offline demo in a simulator),
 **Update Scripty.command**, and **Uninstall Scripty.command**. The first time you
 open any of them, macOS may say it is from an unidentified developer —
@@ -92,6 +94,10 @@ rather than telling you it found none, finds your signing team, builds,
 installs, and launches. The first pairing needs the cable; after that, if you
 turn on "Connect via network" for the device in Xcode's Devices window, later
 runs find it over Wi-Fi and you can leave the cable out.
+
+If you would rather not open a terminal, double-click **Install on iPhone or
+iPad.command** at the top of the project instead — it runs this same path (Xcode
+check included) in a Terminal window Finder opens for you.
 
 ```sh
 ./scripts/install.sh --list                      # show paired devices
