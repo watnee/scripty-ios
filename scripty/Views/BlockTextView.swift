@@ -217,8 +217,49 @@ struct BlockTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            let retypeTo = applyLiveForceDetection(textView)
             model.liveEdit(block, text: textView.text)
+            if let retypeTo {
+                let block = block
+                Task { await model.retypeLive(block, to: retypeTo) }
+            }
             refreshSuggestions(textView.text)
+        }
+
+        /// Live Fountain force-marker detection — the reflow the web editor's
+        /// `input` handler runs on every keystroke. When the text opens with a
+        /// force marker (`.@>~#=`, `[[`, `===`) strip it in place, keeping the
+        /// caret where the browser does, and return the element to retype to
+        /// (nil when the element is unchanged). The INT./`TO:`/cue heuristics
+        /// stay on Return via `liveDetect`, so a half-typed word never reflows.
+        private func applyLiveForceDetection(_ textView: UITextView) -> BlockType? {
+            let text = textView.text ?? ""
+            guard let detected = FountainDetector.liveDetect(text) else { return nil }
+            let typeChanged = detected.type != block.blockType
+            let contentChanged = detected.content != text
+            guard typeChanged || contentChanged else { return nil }
+
+            if contentChanged, !Coordinator.dropsLines(from: text, to: detected.content) {
+                let caret = textView.selectedRange.location
+                let newLength = (detected.content as NSString).length
+                textView.text = detected.content
+                textView.selectedRange = NSRange(location: min(caret, newLength), length: 0)
+            }
+            return typeChanged ? detected.type : nil
+        }
+
+        /// Whether rewriting `original` to `detected` would silently drop a line
+        /// from multi-line content — the web's safety net against a rewrite
+        /// collapsing a block to its first line.
+        private static func dropsLines(from original: String, to detected: String) -> Bool {
+            guard original.contains("\n") else { return false }
+            return lineCount(detected) < lineCount(original)
+        }
+
+        private static func lineCount(_ string: String) -> Int {
+            var trimmed = Substring(string)
+            while let last = trimmed.last, last.isWhitespace { trimmed = trimmed.dropLast() }
+            return trimmed.split(separator: "\n", omittingEmptySubsequences: false).count
         }
 
         func textView(_ textView: UITextView,

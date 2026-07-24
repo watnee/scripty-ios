@@ -119,6 +119,21 @@ enum FountainDetector {
         return nil
     }
 
+    /// The live (keystroke) counterpart to `detect`.
+    ///
+    /// The web editor reflows an element *while typing* only when the text
+    /// opens with a force marker (`.@>~#=`, `[[`, `===` — `fountain-power.js`'s
+    /// `input` handler); the INT./`TO:`/ALL-CAPS-cue heuristics are held back
+    /// for Return, so a half-typed "INT" never flips an action line to a scene
+    /// heading mid-word. Mirror that split: return a detection live only in the
+    /// force-marker case, otherwise nil (and let Return call `detect`).
+    static func liveDetect(_ raw: String) -> FountainDetection? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return nil }
+        guard ".@>~#=".contains(first) || trimmed.hasPrefix("[[") else { return nil }
+        return detect(raw)
+    }
+
     /// A short ALL-CAPS line that reads as an intentional speaker cue.
     private static func isCharacterCueLine(_ line: String) -> Bool {
         guard !line.isEmpty, line.count <= 60 else { return false }
