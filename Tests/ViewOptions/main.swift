@@ -193,6 +193,24 @@ func run() {
         check("unreadable storage opens collapsed",
               SongWorkspaceOpenState(projectId: 7, defaults: store).load().isEmpty, true)
     }
+
+    print("")
+    print("Remembered outline tab")
+    do {
+        let store = scratch("outlinetab")
+        let options = ScriptViewOptions(projectId: 7, defaults: store)
+        // A first open has no stored list — the view reads nil and shows Outline.
+        check("nothing remembered to begin with", options.rememberedOutlineTab == nil, true)
+
+        options.rememberOutlineTab("characters")
+        check("the chosen list lands in this client's key",
+              store.string(forKey: "scripty-outline-list-tab-project-7") ?? "", "characters")
+        check("it reads back on reopen",
+              ScriptViewOptions(projectId: 7, defaults: store).rememberedOutlineTab ?? "", "characters")
+        // Scoped to the project, like the remembered edition and position.
+        check("it is remembered per project",
+              ScriptViewOptions(projectId: 8, defaults: store).rememberedOutlineTab == nil, true)
+    }
 }
 
 MainActor.assumeIsolated { run() }

@@ -116,6 +116,29 @@ final class ScriptViewOptions {
         defaults.set(blockId, forKey: Self.positionKey(project: projectId))
     }
 
+    // MARK: - Outline list
+
+    /// Which list the outline sheet last showed — its Outline, Characters,
+    /// Locations, Songs, Bookmarks or Pins tab — so reopening it lands back on
+    /// the list the writer was working from rather than resetting to Outline.
+    ///
+    /// The web keeps a separate open/closed flag per side panel
+    /// (`scripty-fountain-character-list`, `…-location-list`, and so on), all
+    /// device-wide; this client collapses those panels into one sheet that shows
+    /// a single list at a time, so the faithful analog is "which tab", one stored
+    /// value rather than six. It is scoped to the project like the remembered
+    /// edition and position beside it — a writer casting one draft and blocking
+    /// another wants each to reopen on the list it was left on. Stored as the
+    /// tab's raw name; an unrecognised or absent value falls back to Outline,
+    /// which the caller supplies by treating nil as the default.
+    var rememberedOutlineTab: String? {
+        defaults.string(forKey: Self.outlineTabKey(project: projectId))
+    }
+
+    func rememberOutlineTab(_ tab: String) {
+        defaults.set(tab, forKey: Self.outlineTabKey(project: projectId))
+    }
+
     // MARK: - Editing lock
 
     /// Read-only until unlocked. A private setter because the value depends on
@@ -142,6 +165,13 @@ final class ScriptViewOptions {
 
     private static func positionKey(project: Int) -> String {
         "scripty-editor-position-project-\(project)"
+    }
+
+    /// This client's own key — the web has no single "which list" preference to
+    /// mirror, since it tracks each panel separately. Kept project-scoped and in
+    /// the same `scripty-…-project-<id>` family as its neighbours.
+    private static func outlineTabKey(project: Int) -> String {
+        "scripty-outline-list-tab-project-\(project)"
     }
 
     private static func lockKey(edition: Int) -> String {

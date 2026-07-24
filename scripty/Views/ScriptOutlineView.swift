@@ -12,9 +12,22 @@ import SwiftUI
 struct ScriptOutlineView: View {
     let model: ScriptModel
     let navigator: ScriptNavigator
+    /// Where the last-shown list is remembered. Optional so callers without a
+    /// project's options (previews, say) still get a working sheet.
+    var options: ScriptViewOptions?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: Tab = .outline
+    @State private var tab: Tab
+
+    init(model: ScriptModel, navigator: ScriptNavigator, options: ScriptViewOptions? = nil) {
+        self.model = model
+        self.navigator = navigator
+        self.options = options
+        // Reopen on the list the writer left, falling back to Outline for a
+        // first open or a stored name a later build no longer knows.
+        let remembered = options?.rememberedOutlineTab.flatMap(Tab.init(rawValue:))
+        _tab = State(initialValue: remembered ?? .outline)
+    }
 
     enum Tab: String, CaseIterable, Identifiable {
         case outline, characters, locations, songs, bookmarks, pins
@@ -71,6 +84,9 @@ struct ScriptOutlineView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
+                .onChange(of: tab) { _, newTab in
+                    options?.rememberOutlineTab(newTab.rawValue)
+                }
 
                 list
             }
