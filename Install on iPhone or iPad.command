@@ -23,4 +23,20 @@ if [ ! -x scripts/finder-run.sh ]; then
     read -r -p "Press Return to close this window." _ || true
     exit 1
 fi
+
+# Say the three physical steps up front, before the Xcode checks and the build
+# scroll past, so someone who has never done this knows what to do and that the
+# window handles the rest. Anything else that comes up — Developer Mode, trusting
+# the app — is spelled out by the lines below as it happens.
+cat <<'EOF'
+Putting Scripty on your iPhone or iPad. All you do is:
+
+  1. Plug it into this Mac with a cable.
+  2. Unlock it, and tap "Trust This Computer" if it asks.
+  3. Leave this window running — it builds Scripty, installs it, and opens
+     it on the device.
+
+You can start now; it waits for the device to show up.
+
+EOF
 exec scripts/finder-run.sh "The install" ./scripts/get.sh -- --device
