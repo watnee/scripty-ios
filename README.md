@@ -29,9 +29,13 @@ rather do it by hand, `git clone` this repository and read on.
 If a terminal is not your thing, skip the command entirely: download this
 repository (the green **Code** button > **Download ZIP**, or `git clone`) and
 double-click **Install Scripty.command** inside it. Finder opens it in a
-Terminal window and it does exactly what the one-liner does. The first time,
-macOS may say it is from an unidentified developer — right-click the file,
-choose **Open**, and that button runs it once and remembers.
+Terminal window and it does exactly what the one-liner does. Three siblings sit
+next to it for the other things you might want without typing a command —
+**Try Scripty (Demo).command** (the offline demo in a simulator),
+**Update Scripty.command**, and **Uninstall Scripty.command**. The first time you
+open any of them, macOS may say it is from an unidentified developer —
+right-click the file, choose **Open**, and that button runs it once and
+remembers.
 
 ## Run it
 
@@ -123,6 +127,26 @@ terminal — run from a script or CI and it reports the same problems and stops.
 
 Apps signed with a free Apple ID stop working after seven days. Rerun
 `install.sh` to renew them.
+
+## Remove it
+
+```sh
+./scripts/uninstall.sh
+```
+
+The reverse of the two above: it takes Scripty off a connected iPhone or iPad,
+or off a booted simulator when none is plugged in. Without a build to ask, it
+removes both names the installers use — the default `scripty.scripty` and the
+`com.<team>.scripty` that `install.sh` remembers in `.scripty-install` — so it
+works whichever one you ended up with.
+
+```sh
+./scripts/uninstall.sh --simulator            # a booted simulator, ignore devices
+./scripts/uninstall.sh --device "Clint iPhone" # a device by name
+./scripts/uninstall.sh --bundle-id com.you.scripty # one specific id
+```
+
+Whatever the app was keeping goes with it; reinstalling is the way back.
 
 ## Send it to someone else
 
