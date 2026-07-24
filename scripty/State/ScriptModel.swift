@@ -577,6 +577,45 @@ final class ScriptModel {
         }
     }
 
+    /// Live force-marker retype: the writer just typed a leading `.`/`@`/`>`/…
+    /// and the element must change *now*, mid-keystroke — the reflow the web
+    /// editor's `input` handler does. Unlike `changeType`, this must not clobber
+    /// keystrokes that arrive while the retype is in flight: whatever text is
+    /// live when the server answers wins over the (older) content the retype
+    /// carried, so typing straight through a `.INT` never loses the letters
+    /// typed after the marker.
+    func retypeLive(_ block: Block, to type: BlockType) async {
+        guard let link = block.link(.setType) else { return }
+        // The keystroke that triggered this already armed a content commit;
+        // cancel it so it does not race the retype with a type-less write.
+        commitTasks[block.id]?.cancel()
+        commitTasks[block.id] = nil
+        let content = liveText[block.id] ?? block.content ?? ""
+        do {
+            let updated: Block = try await app.client.fetch(
+                from: link, method: "POST",
+                body: SetTypeCommand(type: type.rawValue, content: content,
+                                     personId: block.personId, tags: block.tags))
+            replace(updated)
+            // Keep any letters that landed during the round-trip; only when the
+            // live copy still matches what we sent is the server value the
+            // authoritative one and the buffer can be dropped.
+            if let newer = liveText[block.id], newer != content {
+                scheduleCommit(block.id)
+            } else {
+                liveText[block.id] = nil
+                markSaved(block.id)
+            }
+            await refreshUndoRedo()
+            errorMessage = nil
+        } catch {
+            // Losing the type change is acceptable; losing the writing is not,
+            // so hold the live copy and let the backoff retry it as a plain save.
+            markUnsaved(block.id, after: error)
+            reportUnlessRetrying(error)
+        }
+    }
+
     /// Seed the single element an untouched script needs before there is
     /// anything to type into.
     func seedInitialBlock() async {

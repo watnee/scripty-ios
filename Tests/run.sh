@@ -53,6 +53,16 @@ swiftc -o "$BUILD/clipboard" \
 "$BUILD/clipboard" || status=1
 
 echo
+echo "== Fountain detection =="
+swiftc -o "$BUILD/fountain" \
+    "$SRC/Models/Block.swift" \
+    "$SRC/Models/ScriptClipboard.swift" \
+    "$SRC/Models/FountainDetect.swift" \
+    "${SHARED[@]}" \
+    "$ROOT/Tests/FountainDetect/main.swift"
+"$BUILD/fountain" || status=1
+
+echo
 echo "== Note formatting =="
 swiftc -o "$BUILD/notes" \
     "$SRC/Models/NoteFormatting.swift" \
