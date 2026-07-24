@@ -31,6 +31,21 @@ struct ScriptActions {
     /// in the Format menu and whether retyping is offered at all.
     var focusedType: BlockType?
 
+    /// Character formatting for the focused element — the web Format menu's
+    /// Bold / Italic / Underline and alignment, which the client otherwise
+    /// offers only as tap-chips in the FormatBar. Nil when nothing editable is
+    /// focused; the state flags drive the menu's check marks. These act on the
+    /// focused block while the writer is typing in it, exactly as `setType`
+    /// (⌘1–9) already does.
+    var toggleBold: (() -> Void)?
+    var toggleItalic: (() -> Void)?
+    var toggleUnderline: (() -> Void)?
+    var setAlign: ((TextAlign) -> Void)?
+    var isBold = false
+    var isItalic = false
+    var isUnderline = false
+    var alignment: TextAlign?
+
     /// The clipboard, at the level of whole elements rather than of the text
     /// inside one. Nil when nothing is focused, or when the pasteboard holds
     /// nothing worth pasting.
@@ -173,12 +188,84 @@ struct ScriptCommands: Commands {
 
     @ViewBuilder
     private var formatMenu: some View {
+        styleItems
+        Divider()
+        alignItems
+        Divider()
+        elementTypeItems
+    }
+
+    /// Bold / Italic / Underline on the focused element. ⌘B / ⌘I / ⌘U are the
+    /// universal chords and none is claimed elsewhere here or by the block text
+    /// view, so they reach the menu even while typing — the same route ⌘1–9 use.
+    @ViewBuilder
+    private var styleItems: some View {
+        Button { actions?.toggleBold?() } label: {
+            checked("Bold", on: actions?.isBold ?? false)
+        }
+        .keyboardShortcut("b", modifiers: .command)
+        .disabled(actions?.toggleBold == nil)
+
+        Button { actions?.toggleItalic?() } label: {
+            checked("Italic", on: actions?.isItalic ?? false)
+        }
+        .keyboardShortcut("i", modifiers: .command)
+        .disabled(actions?.toggleItalic == nil)
+
+        Button { actions?.toggleUnderline?() } label: {
+            checked("Underline", on: actions?.isUnderline ?? false)
+        }
+        .keyboardShortcut("u", modifiers: .command)
+        .disabled(actions?.toggleUnderline == nil)
+    }
+
+    @ViewBuilder
+    private var alignItems: some View {
+        // ⌘⇧L / ⌘⇧E follow the word-processor convention and are both free. The
+        // web's align-right chord is ⌘⇧R, which is already this client's "Read
+        // Script", so the right item carries no shortcut rather than colliding —
+        // whichever view lost that responder race would silently do nothing.
+        alignButton(.left, key: "l")
+        alignButton(.center, key: "e")
+        alignButton(.right, key: nil)
+    }
+
+    @ViewBuilder
+    private func alignButton(_ align: TextAlign, key: KeyEquivalent?) -> some View {
+        if let key {
+            alignPlain(align).keyboardShortcut(key, modifiers: [.command, .shift])
+        } else {
+            alignPlain(align)
+        }
+    }
+
+    private func alignPlain(_ align: TextAlign) -> some View {
+        Button { actions?.setAlign?(align) } label: {
+            checked("Align \(align.label)", on: actions?.alignment == align)
+        }
+        .disabled(actions?.setAlign == nil)
+    }
+
+    @ViewBuilder
+    private var elementTypeItems: some View {
         ForEach(Array(BlockType.allCases.enumerated()), id: \.element.id) { index, type in
             ElementTypeCommand(
                 type: type,
                 index: index,
                 isCurrent: actions?.focusedType == type,
                 setType: actions?.setType)
+        }
+    }
+
+    /// A menu label that carries a check mark when the state is on, matching
+    /// `ElementTypeCommand` — a Toggle would imply switching a thing off, but a
+    /// formatting chord just re-applies, so the mark is an indicator only.
+    @ViewBuilder
+    private func checked(_ title: String, on: Bool) -> some View {
+        if on {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 
