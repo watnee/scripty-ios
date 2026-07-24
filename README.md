@@ -131,8 +131,10 @@ Your team, and the bundle id if it had to pick one, are remembered in
 `.scripty-install` so later runs need no flags. Waiting and asking need a
 terminal — run from a script or CI and it reports the same problems and stops.
 
-Apps signed with a free Apple ID stop working after seven days. Rerun
-`install.sh` to renew them.
+Apps signed with a free Apple ID stop working after seven days — the app is
+still on the Home Screen, it just won't open. Rerun `install.sh` to renew it;
+it remembers when it last installed and, a week on, tells you up front that the
+copy has likely expired and that this run brings it back.
 
 ## Remove it
 
