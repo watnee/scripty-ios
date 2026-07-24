@@ -26,6 +26,13 @@ script points you at it and stops.
 Rerunning it updates an existing clone and starts the app again. If you would
 rather do it by hand, `git clone` this repository and read on.
 
+If a terminal is not your thing, skip the command entirely: download this
+repository (the green **Code** button > **Download ZIP**, or `git clone`) and
+double-click **Install Scripty.command** inside it. Finder opens it in a
+Terminal window and it does exactly what the one-liner does. The first time,
+macOS may say it is from an unidentified developer — right-click the file,
+choose **Open**, and that button runs it once and remembers.
+
 ## Run it
 
 ```sh
