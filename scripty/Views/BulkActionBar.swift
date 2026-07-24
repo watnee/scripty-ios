@@ -180,6 +180,9 @@ struct BulkActionBar: View {
                             run { await model.bulkSetFont(ids, font: font) }
                         }
                     }
+                    Button("Default") {
+                        run { await model.bulkClearFont(ids) }
+                    }
                 }
                 Section("Highlight") {
                     ForEach(BlockHighlight.allCases) { colour in

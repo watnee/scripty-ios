@@ -69,6 +69,16 @@ extension ScriptModel {
         }
     }
 
+    /// Resets the font to the default. Like clearing a highlight, this needs its
+    /// own flag: a blank font would be rejected as an unknown typeface rather
+    /// than understood as "no override".
+    @discardableResult
+    func bulkClearFont(_ ids: [Int]) async -> Bool {
+        await perform(.bulkFormat, ids: ids) { projectId in
+            BulkFormatCommand(ids: ids, projectId: projectId, clearFont: true)
+        }
+    }
+
     /// Flips the style on each block independently, so a mixed selection comes
     /// back inverted rather than uniform — the web behaviour, kept on purpose.
     @discardableResult

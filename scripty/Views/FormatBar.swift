@@ -17,7 +17,9 @@ struct FormatBar: View {
     let block: Block
 
     private var align: TextAlign { TextAlign(serverValue: block.textAlign) ?? .left }
-    private var font: ScriptFont { ScriptFont(serverValue: block.font) ?? .courierPrime }
+    /// nil is a real state here — the element carries no font override and so
+    /// prints in the default typeface. The menu shows "Default" for it.
+    private var font: ScriptFont? { ScriptFont(serverValue: block.font) }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -64,14 +66,17 @@ struct FormatBar: View {
 
     private var fontMenu: some View {
         Menu {
-            Picker("Font", selection: fontBinding) {
-                ForEach(ScriptFont.allCases) { option in
-                    Text(option.label).tag(option)
-                }
+            // "Default" resets the override, matching the web Format menu's
+            // "Font: Default". It clears through the bulk endpoint's `clearFont`
+            // flag, since the per-block PUT can only set a named font — a blank
+            // one there is treated as "leave alone", not "reset".
+            fontOption(nil, label: "Default")
+            ForEach(ScriptFont.allCases) { option in
+                fontOption(option, label: option.label)
             }
         } label: {
             HStack(spacing: 5) {
-                Text(font.label)
+                Text(font?.label ?? "Default")
                 Image(systemName: "chevron.up.chevron.down").font(.caption2)
             }
             .font(.footnote.weight(.medium))
@@ -85,10 +90,23 @@ struct FormatBar: View {
         .accessibilityLabel("Font")
     }
 
-    private var fontBinding: Binding<ScriptFont> {
-        Binding(
-            get: { font },
-            set: { newValue in Task { await model.setFont(block, to: newValue) } })
+    @ViewBuilder
+    private func fontOption(_ option: ScriptFont?, label: String) -> some View {
+        Button {
+            Task {
+                if let option {
+                    await model.setFont(block, to: option)
+                } else {
+                    await model.bulkClearFont([block.id])
+                }
+            }
+        } label: {
+            if option == font {
+                Label(label, systemImage: "checkmark")
+            } else {
+                Text(label)
+            }
+        }
     }
 
     // MARK: - Chip
