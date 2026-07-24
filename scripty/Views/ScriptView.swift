@@ -210,7 +210,7 @@ struct ScriptView: View {
             }
         }
         .sheet(isPresented: $showingOutline) {
-            ScriptOutlineView(model: model, navigator: navigator)
+            ScriptOutlineView(model: model, navigator: navigator, options: options)
         }
         .sheet(isPresented: $showingStats) {
             ScriptStatsView(model: model)
