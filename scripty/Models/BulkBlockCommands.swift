@@ -34,8 +34,9 @@ struct BulkDeleteCommand: Encodable {
 /// changes share a single checkpoint.
 ///
 /// Every field is optional and omitted fields are left alone — which is why
-/// clearing a highlight needs its own flag rather than a nil colour, since nil
-/// already means "leave it".
+/// clearing a highlight or resetting a font needs its own flag rather than a
+/// nil/blank value, since nil already means "leave it" and the server rejects a
+/// blank font outright.
 struct BulkFormatCommand: Encodable {
     var ids: [Int]
     var projectId: Int
@@ -46,6 +47,10 @@ struct BulkFormatCommand: Encodable {
     var style: String?
     var highlight: String?
     var clearHighlight: Bool?
+    /// Reset the font to the default. A blank `font` cannot mean this, because
+    /// the server rejects any font it does not recognise; the flag is the
+    /// counterpart of `clearHighlight`.
+    var clearFont: Bool?
 }
 
 /// Find and replace across the selected elements. `find` is matched literally,

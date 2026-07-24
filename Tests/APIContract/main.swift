@@ -1118,6 +1118,7 @@ func run() async {
     await checkActorProjects()
     await checkProjectTeams(pid: pid)
     await checkBlockTags(pid: pid)
+    await checkClearFont(pid: pid)
 
     print(failures == 0 ? "\nALL CHECKS PASSED" : "\n\(failures) CHECK(S) FAILED")
 }
@@ -1159,6 +1160,47 @@ func checkBlockTags(pid: Int) async {
 
     _ = await be.respond(method: "PUT", url: url("/api/block/\(bid)"),
                          body: body(["content": original]))
+}
+
+/// Resetting an element's font to the default — the web Format menu's
+/// "Font: Default". Setting one of the three named fonts rides the ordinary
+/// bulk-format call, but clearing needs its own `clearFont` flag: a blank font
+/// is rejected as an unknown typeface, so it cannot double as "reset" the way a
+/// blank highlight clears a tint.
+func checkClearFont(pid: Int) async {
+    let collection = json(await be.respond(
+        method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data)
+    guard let block = embedded(collection).first, let bid = block["id"] as? Int else {
+        check("a block to reformat was found", false)
+        return
+    }
+    func fontOf(_ id: Int) async -> String? {
+        let blocks = embedded(json(await be.respond(
+            method: "GET", url: url("/api/block?projectId=\(pid)"), body: nil).data))
+        return blocks.first { $0["id"] as? Int == id }?["font"] as? String
+    }
+
+    let set = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+        body: body(["ids": [bid], "projectId": pid, "font": "Arial"]))
+    check("bulk set font -> 200", set.status == 200, "got \(set.status)")
+    var font = await fontOf(bid)
+    check("font canonicalized to ARIAL", font == "ARIAL", "got \(font ?? "nil")")
+
+    // A blank font is not "reset"; the REST endpoint rejects it outright, which
+    // is the whole reason clearFont has to exist as a separate flag.
+    let blank = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+        body: body(["ids": [bid], "projectId": pid, "font": ""]))
+    check("a blank font is rejected, not treated as default", blank.status == 400,
+          "got \(blank.status)")
+    font = await fontOf(bid)
+    check("the rejected blank font left ARIAL in place", font == "ARIAL", "got \(font ?? "nil")")
+
+    // clearFont is the explicit reset, the counterpart of clearHighlight.
+    let cleared = await be.respond(method: "POST", url: url("/api/block/bulk/format"),
+        body: body(["ids": [bid], "projectId": pid, "clearFont": true]))
+    check("clearFont -> 200", cleared.status == 200, "got \(cleared.status)")
+    font = await fontOf(bid)
+    check("clearFont resets the font to the default", font == nil, "got \(font ?? "nil")")
 }
 
 /// A project can be assigned to teams from its own row (the web production

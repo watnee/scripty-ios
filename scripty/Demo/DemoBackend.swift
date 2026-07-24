@@ -3274,7 +3274,9 @@ actor DemoBackend {
                 guard let canonical = canonicalAlign(align) else { return badRequest("align") }
                 mutate(projectId, where: targets) { $0.textAlign = canonical }
             }
-            if let font = fields["font"] as? String {
+            if fields["clearFont"] as? Bool == true {
+                mutate(projectId, where: targets) { $0.font = nil }
+            } else if let font = fields["font"] as? String {
                 guard let canonical = canonicalFont(font) else { return badRequest("font") }
                 mutate(projectId, where: targets) { $0.font = canonical }
             }
