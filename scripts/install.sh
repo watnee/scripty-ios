@@ -74,6 +74,23 @@ if ! xcrun -f xcodebuild >/dev/null 2>&1; then
     exit 1
 fi
 
+# A free Apple ID signs for only seven days, so a device copy quietly stops
+# opening a week later — the most confusing thing about this whole path, because
+# nothing changed and the app just won't start. If we installed one before, say
+# how long ago up front, so "it broke on its own" reads as "rerunning renews it"
+# — which is the whole reason to run this again.
+LAST_INSTALL=$(remembered INSTALLED)
+case "$LAST_INSTALL" in
+    ''|*[!0-9]*) ;;
+    *)
+        AGO=$(( ( $(date +%s) - LAST_INSTALL ) / 86400 ))
+        if interactive && [ "$AGO" -ge 7 ]; then
+            echo "The last install from here was $AGO days ago, and a free Apple ID's"
+            echo "signature lasts seven — so if Scripty had stopped opening, this renews it."
+            echo
+        fi ;;
+esac
+
 # Ask for a number rather than making someone rerun the whole command with a
 # flag they now know the value of.
 choose() {
@@ -307,6 +324,10 @@ fi
 echo "Installing…"
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH" >/dev/null
 
+# The signature lands with the app, whether or not the launch below succeeds, so
+# stamp the clock now. The next run reads this to know a copy has likely expired.
+remember INSTALLED "$(date +%s)"
+
 launch() {
     # `--` keeps devicectl from reading the leading-dash demo flag as its own.
     local args=()
@@ -337,3 +358,4 @@ if [ "$LAUNCH" -eq 1 ] && ! launch; then
 fi
 
 echo "Scripty is installed on $DEVICE_NAME."
+echo "A free Apple ID signs it for seven days; rerun this to renew it."
