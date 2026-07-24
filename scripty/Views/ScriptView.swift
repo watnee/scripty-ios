@@ -661,6 +661,19 @@ struct ScriptView: View {
                 actions.setType = { type in
                     Task { await model.changeType(focused, to: type) }
                 }
+                // The Format menu's character-styling half, on the same
+                // focused element the FormatBar shows — reachable now from the
+                // keyboard and the menu bar, not only by tapping a chip.
+                actions.isBold = focused.textBold ?? false
+                actions.isItalic = focused.textItalic ?? false
+                actions.isUnderline = focused.textUnderline ?? false
+                actions.alignment = TextAlign(serverValue: focused.textAlign) ?? .left
+                actions.toggleBold = { Task { await model.toggleBold(focused) } }
+                actions.toggleItalic = { Task { await model.toggleItalic(focused) } }
+                actions.toggleUnderline = { Task { await model.toggleUnderline(focused) } }
+                actions.setAlign = { align in
+                    Task { await model.setAlign(focused, to: align) }
+                }
             }
             actions.copyElement = { model.copyBlocks([focused]) }
             if model.canCut(focused) && !options.isEditingLocked {
